@@ -1,0 +1,7 @@
+node_modules/
+lib/
+*.tsbuildinfo
+.DS_Store
+
+# Generated from src/builtin-rules/*.md by scripts/embed-builtin-rules.mts
+src/generated/

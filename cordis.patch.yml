@@ -1,0 +1,22 @@
+# Bundle patch applied over the selected DSH profile when this package is listed
+# in `dsh.profile.bundles`. The row id is deployment-local; the package name
+# must match package.json.
+
+- insert:
+    - id: dsh-rules
+      name: '@ndsanes/dsh-rules'
+      config:
+        enabled: true
+        # Profile row id the `rule` tool writes toggles to.
+        settingsNamespace: dsh-rules
+        # `.omp/agent` equivalent on DSH: user-level rules root.
+        userRulesDir: '~/.omp/agent'
+        ttsr:
+          enabled: true
+          interruptMode: always
+          contextMode: keep
+          repeatMode: once
+          repeatGap: 10
+          builtinRules: true
+          disabledRules: []
+          judge: auto

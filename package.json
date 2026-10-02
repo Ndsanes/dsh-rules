@@ -1,0 +1,112 @@
+{
+  "name": "@ndsanes/dsh-rules",
+  "description": "OMP rules port for DeepSeek Harness: rulebook, always-apply injection, rule:// addressing, and time-traveling stream rules that interrupt violating model output",
+  "version": "0.1.0",
+  "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Ndsanes/dsh-rules.git"
+  },
+  "homepage": "https://github.com/Ndsanes/dsh-rules#readme",
+  "bugs": {
+    "url": "https://github.com/Ndsanes/dsh-rules/issues"
+  },
+  "main": "lib/index.mjs",
+  "exports": {
+    "./client": {
+      "default": "./client/client.js"
+    },
+    "./src/*": "./src/*",
+    "./package.json": "./package.json",
+    ".": {
+      "default": "./lib/index.mjs"
+    },
+    "./typert": {
+      "default": "./lib/typert.host.mjs"
+    }
+  },
+  "files": [
+    "lib",
+    "client",
+    "src",
+    "scripts",
+    "cordis.patch.yml",
+    "README.md"
+  ],
+  "keywords": [
+    "deepseek-harness",
+    "dsh",
+    "cordis",
+    "plugin",
+    "rules",
+    "rulebook",
+    "ttsr"
+  ],
+  "scripts": {
+    "embed:rules": "node --experimental-strip-types scripts/embed-builtin-rules.mts",
+    "prebuild": "pnpm run embed:rules",
+    "build": "tsc -b && tsdown && node scripts/build-client.mjs",
+    "prepack": "pnpm run build",
+    "prepare": "node --experimental-strip-types scripts/embed-builtin-rules.mts && tsdown && node scripts/build-client.mjs",
+    "pretest": "pnpm run embed:rules",
+    "test": "vitest run",
+    "pretypecheck": "pnpm run embed:rules",
+    "typecheck": "tsc -b --pretty false && tsc -p tsconfig.vitest.json --pretty false"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/dsh-agent": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-llm": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-session": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-system-prompt": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-tools": "0.2.0-rc.2",
+    "@deepseek-ai/schemastery": "^3.18.1"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/cordis-plugin-loader": "1.0.5",
+    "@deepseek-ai/dsh-agent": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-agent-loop": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-agent-loop-testkit": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-client-locale": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-llm": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-session": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-session-persistence": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-system-prompt": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-tools": "0.2.0-rc.2",
+    "@deepseek-ai/schemastery": "^3.18.1",
+    "@types/js-yaml": "^4.0.9",
+    "@types/node": "^26.6.3",
+    "@types/react": "~18.3.31",
+    "@types/react-dom": "~18.3.1",
+    "esbuild": "^0.28.2",
+    "react": "~18.3.1",
+    "react-dom": "~18.3.1",
+    "tsdown": "^0.23.0",
+    "typescript": "^5.9.2",
+    "vitest": "^3.2.4"
+  },
+  "engines": {
+    "node": "^22.19.0 || >=24.0.0"
+  },
+  "dependencies": {
+    "@ast-grep/napi": "^0.45.3",
+    "@deepseek-ai/dsh-settings": "0.2.0-rc.2",
+    "js-yaml": "^5.4.2",
+    "zod": "4.5.1"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-runtime/client",
+        "@deepseek-ai/dsh-api-remotes/client",
+        "@deepseek-ai/dsh-client-locale/client"
+      ]
+    }
+  }
+}

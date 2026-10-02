@@ -1,0 +1,8 @@
+allowBuilds:
+  esbuild: true
+# dsh 0.2.0-rc.2 was published on the day this plugin was built, so the
+# supply-chain release-age policy would otherwise reject it.
+minimumReleaseAgeExclude:
+  - '@deepseek-ai/dsh-*'
+  - '@deepseek-ai/cordis'
+  - '@deepseek-ai/schemastery'
