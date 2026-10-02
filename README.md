@@ -46,6 +46,15 @@ The migration body.
 | `agents` | Agent-name globs; `main` and `sub` are reserved. |
 | `interruptMode` | `never` \| `prose-only` \| `tool-only` \| `always`. |
 
+In the rule editor, a field with a fixed vocabulary — `interruptMode` today —
+is a dropdown rather than a free text box, so its value cannot be misspelled.
+That matters more than a missing menu: an unrecognised `interruptMode` is not
+rejected, it falls back to the profile default, and the default is `always` —
+so a rule written to stay quiet would otherwise end up interrupting everything.
+The dropdown's first option means "inherit the profile default", and choosing it
+**removes the line** from the file rather than writing an empty value, which
+would parse as unrecognised and land on the same default.
+
 Write regexes with single-quoted YAML scalars. A double-quoted scalar treats
 `\s`, `(` and `(`-family sequences as YAML escapes, which makes js-yaml reject
 the whole document. The plugin then falls back to reading the block line by line
