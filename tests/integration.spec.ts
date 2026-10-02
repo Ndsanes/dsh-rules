@@ -1,7 +1,7 @@
-import { mkdtemp, mkdir, readdir, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import SystemPrompt, { renderPrompt } from '@deepseek-ai/dsh-system-prompt'
@@ -160,6 +160,49 @@ describe('rule tool on the live registry', () => {
 
     expect(JSON.stringify(result.value)).toContain('Available rules:')
     expect(JSON.stringify(result.value)).toContain('no-console-log')
+  })
+
+  describe('creating a rule on disk', () => {
+    const created = 'learned-no-generated-files'
+
+    it('writes the file into the session workspace, creating the directory', async () => {
+      // The workspace has no `.omp/rules/` at all, so this also covers mkdir.
+      const workspace = join(await mkdtemp(join(tmpdir(), 'dsh-create-')), 'project')
+      const { ctx, host } = await boot({ enabled: true, userRulesDir: join(workspace, 'no-user') }, workspace, 'create-1')
+
+      const result = await ctx.tools.execute(executionInput(host.agent, {
+        action: 'create',
+        name: created,
+        frontmatter: 'description: Generated files are not committed',
+        body: 'Check .gitignore before writing one.',
+      }))
+
+      expect(JSON.stringify(result.value)).toContain(`Created rule \\\"${created}\\\"`)
+      const file = join(workspace, '.omp', 'rules', `${created}.md`)
+      expect(await readFile(file, 'utf8')).toBe(
+        '---\ndescription: Generated files are not committed\n---\n\nCheck .gitignore before writing one.\n',
+      )
+      await rm(dirname(workspace), { recursive: true, force: true })
+    })
+
+    it('never truncates a file that is already there', async () => {
+      // `wx` rather than `w`: a rule whose file exists but whose name discovery
+      // never reported — one that failed to parse, say — would otherwise be
+      // silently overwritten by a rule the model invented.
+      const workspace = join(await mkdtemp(join(tmpdir(), 'dsh-create-')), 'project')
+      await mkdir(join(workspace, '.omp', 'rules'), { recursive: true })
+      const file = join(workspace, '.omp', 'rules', `${created}.md`)
+      await writeFile(file, 'hand written, do not lose me\n', 'utf8')
+      const { ctx, host } = await boot({ enabled: true, userRulesDir: join(workspace, 'no-user') }, workspace, 'create-2')
+
+      const result = await ctx.tools.execute(executionInput(host.agent, {
+        action: 'create', name: created, frontmatter: 'description: d', body: 'b',
+      }))
+
+      expect(JSON.stringify(result.value)).toContain('already exists')
+      expect(await readFile(file, 'utf8')).toBe('hand written, do not lose me\n')
+      await rm(dirname(workspace), { recursive: true, force: true })
+    })
   })
 })
 

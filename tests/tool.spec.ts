@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import type { ToolDefinition, ToolExecution, ToolRunContext } from '@deepseek-ai/dsh-tools'
 import { astMatch, languageForPath } from '../src/ast.ts'
 import { buildRuleFromMarkdown, type Rule } from '../src/rule.ts'
-import { createRuleTool, type RuleLookup, type RuleToggle } from '../src/tool.ts'
+import { createRuleTool, rejectRuleName, type RuleLookup, type RuleToggle, type RuleWriter } from '../src/tool.ts'
 
 function rule(name: string, body: string): Rule {
   return buildRuleFromMarkdown({
@@ -24,6 +24,7 @@ function captureTool(): { tool: ToolDefinition; dispose: () => void } {
     },
     () => currentLookup(),
     currentToggle,
+    currentWriter,
   )
   expect(tool.name).toBe('rule')
   if (registered === undefined) throw new Error('tool was not registered')
@@ -53,6 +54,20 @@ function currentLookup(): RuleLookup {
 }
 
 /** The toggle surface the captured tool drives. */
+/** Rule files the stub writer records, so a create can be asserted on. */
+let created: { name: string; frontmatter: string; body: string }[] = []
+let createGuidance = ''
+
+function currentWriter(): RuleWriter {
+  return {
+    create: async (name, frontmatter, body) => {
+      if (createGuidance !== '') return { ok: false, guidance: createGuidance, disabled: [] }
+      created.push({ name, frontmatter, body })
+      return { ok: true, disabled: [] }
+    },
+  }
+}
+
 function currentToggle(): RuleToggle {
   return {
     toggleable: ['bundled-a', 'bundled-b'],
@@ -81,6 +96,108 @@ describe('createRuleTool', () => {
     active = [rule('a', 'the body')]
     const { tool } = captureTool()
     expect(await run(tool, { name: 'a' })).toBe('the body')
+  })
+
+  describe('creating a rule', () => {
+    beforeEach(() => { created = []; createGuidance = '' })
+
+    it('writes the file and tells the model to have it reviewed', async () => {
+      active = []
+      const { tool } = captureTool()
+      const out = await run(tool, {
+        action: 'create',
+        name: 'no-generated-files',
+        frontmatter: 'description: Generated files are not committed',
+        body: 'Check before writing one.',
+      })
+      expect(created).toEqual([{
+        name: 'no-generated-files',
+        frontmatter: 'description: Generated files are not committed',
+        body: 'Check before writing one.',
+      }])
+      expect(out).toContain('Created rule "no-generated-files"')
+      // The file is the user's, not the model's: without this the write lands
+      // and nobody is told a new rule now governs them.
+      expect(out).toContain('review')
+    })
+
+    it('refuses a name that would escape the rules directory', async () => {
+      // The name becomes a filename. A model that proposed `../../.ssh/...`
+      // must not get a file written there.
+      for (const name of ['../../.ssh/authorized_keys', 'a/b', 'a\\b', '..', '.hidden']) {
+        active = []
+        const { tool } = captureTool()
+        const out = await run(tool, { action: 'create', name, frontmatter: 'description: d', body: 'b' })
+        expect(created).toEqual([])
+        expect(out).toContain('Cannot create a rule')
+      }
+    })
+
+    it('refuses a name a rule already holds', async () => {
+      active = [rule('existing', 'body')]
+      const { tool } = captureTool()
+      const out = await run(tool, { action: 'create', name: 'existing', frontmatter: 'description: d', body: 'b' })
+      expect(created).toEqual([])
+      expect(out).toContain('already exists')
+    })
+
+    it('refuses a rule whose frontmatter carries no settings at all', async () => {
+      // Nothing to configure means nothing to enforce: the file would sit in the
+      // audit as a rule with no trigger and no description, joined no bucket,
+      // and never reach the model. Refusing it says so instead of writing it.
+      active = []
+      const { tool } = captureTool()
+      const out = await run(tool, { action: 'create', name: 'x', frontmatter: '', body: 'b' })
+      expect(created).toEqual([])
+      expect(out).toContain('did not parse')
+    })
+
+    it('accepts frontmatter the parser recovers, because the file still loads', async () => {
+      // js-yaml rejects `"bad \d"`, but the frontmatter reader recovers line by
+      // line, so the rule applies. Refusing it would block a working rule over
+      // a quoting style the plugin already tolerates everywhere else.
+      active = []
+      const { tool } = captureTool()
+      const out = await run(tool, {
+        action: 'create', name: 'x', frontmatter: 'description: "bad \\d here"', body: 'b',
+      })
+      expect(created).toHaveLength(1)
+      expect(out).toContain('Created rule "x"')
+    })
+
+    it('refuses an empty body', async () => {
+      active = []
+      const { tool } = captureTool()
+      expect(await run(tool, { action: 'create', name: 'x', frontmatter: 'description: d', body: '  ' }))
+      .toContain('empty body')
+      expect(created).toEqual([])
+    })
+
+    it('reports the host refusal rather than claiming success', async () => {
+      active = []
+      createGuidance = 'the directory is read-only'
+      const { tool } = captureTool()
+      const out = await run(tool, { action: 'create', name: 'x', frontmatter: 'description: d', body: 'b' })
+      expect(out).toContain('the directory is read-only')
+      expect(out).not.toContain('Created rule')
+    })
+  })
+
+  describe('rejectRuleName', () => {
+    it('accepts an ordinary rule name', () => {
+      expect(rejectRuleName('no-generated-files', new Set())).toBeUndefined()
+      expect(rejectRuleName('ts.import-type', new Set())).toBeUndefined()
+    })
+
+    it('rejects empty, path-shaped, and taken names', () => {
+      expect(rejectRuleName('', new Set())).toBe('empty')
+      expect(rejectRuleName('   ', new Set())).toBe('empty')
+      expect(rejectRuleName('../x', new Set())).toBe('path')
+      expect(rejectRuleName('a/b', new Set())).toBe('path')
+      expect(rejectRuleName('.hidden', new Set())).toBe('path')
+      expect(rejectRuleName('a<b', new Set())).toBe('path')
+      expect(rejectRuleName('taken', new Set(['taken']))).toBe('exists')
+    })
   })
 
   it('lists the available names for an unknown rule', async () => {
@@ -131,7 +248,7 @@ describe('createRuleTool', () => {
     lookupState = 'ready'
     let disposed = false
     const hostDisposer = (): void => { disposed = true }
-    const { dispose } = createRuleTool(() => hostDisposer, () => currentLookup(), currentToggle)
+    const { dispose } = createRuleTool(() => hostDisposer, () => currentLookup(), currentToggle, currentWriter)
 
     expect(disposed).toBe(false)
     dispose()

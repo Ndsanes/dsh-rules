@@ -84,8 +84,17 @@ OMP](#differences-from-omp).
 
 ## The Plugins page
 
-`dsh-rules` ships a browser half. On the Plugins page, under this plugin's own
-entry, it draws two sections.
+`dsh-rules` ships a browser half. The same two sections appear twice: on the
+Plugins page under this plugin's own entry, and as a tab under
+**Settings → Plugins**, which is where a reader goes to configure a plugin. Both
+render the same component; the Settings tab carries no plugin subject, so the
+section draws unconditionally there.
+
+The plugin's own configuration — `enabled`, `userRulesDir`, `pluginRoots`,
+`copilotInstructionDirs`, and the `ttsr` block — is not drawn by this plugin at
+all. The host derives a form from the `Config` schema and renders it against the
+profile row id, which is why the switches live in Settings even on a deployment
+that never opens this panel.
 
 **Rule audit** — the numbers first, then the detail:
 
@@ -191,6 +200,29 @@ answers with the list of addressable rules.
 
 The snapshot covers all three buckets, so a triggered TTSR rule stays
 re-readable after it fires.
+
+## Writing a rule
+
+The tool also writes. When the user states a constraint that will still hold
+next week, the system prompt tells the model to write it down rather than only
+obey it once: call `rule` with `action: "create"`, a name, a `frontmatter`
+block and a `body`, and the file lands in the session workspace's
+`.omp/rules/`. It joins the audit like any other project rule, so it can be
+edited or deleted from the panel.
+
+Three things are refused rather than written:
+
+- **A name that is a path.** The name becomes a filename, so `../`, a path
+  separator, a leading dot or a character the filesystem reserves all stop it
+  before anything is joined to a path.
+- **A name a rule already holds.** Two files claiming one name is a
+  configuration that silently applies only one of them.
+- **An existing file.** The create is exclusive, checked on disk rather than
+  against the discovered set — a rule that failed to parse is absent from that
+  set and would otherwise be overwritten without a word.
+
+The result tells the model to report where it wrote, because the file becomes
+the user's to review.
 
 ## Enforcement
 

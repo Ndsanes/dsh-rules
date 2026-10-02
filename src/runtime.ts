@@ -13,11 +13,12 @@ import type { Context } from '@deepseek-ai/cordis'
 // Type-only: brings the loader's `loader/volatile-update` declaration.
 import type {} from '@deepseek-ai/cordis-plugin-loader'
 import type { Agent } from '@deepseek-ai/dsh-agent'
-import { readFile, writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
+import { mkdir, open, readFile, writeFile } from 'node:fs/promises'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 import type { SettingsForms, SettingsPathOp } from '@deepseek-ai/dsh-settings'
 import type { AssembleContext } from '@deepseek-ai/dsh-system-prompt'
-import type { ToolExecution } from '@deepseek-ai/dsh-tools'
+import type { ToolExecution, ToolRunContext } from '@deepseek-ai/dsh-tools'
 import { directoryExists, provideAuditService, recordTrigger, totalTriggers, triggerCounts, type AuditPublisher, type RuleAuditRow, type ReadRuleResult, type RuleAuditReport, type RuleSourceFile, type ToggleResult, type WorkspaceRef } from './audit.ts'
 import { bucketRules, type Buckets } from './buckets.ts'
 import { createJudge, type Judge } from './judge.ts'
@@ -29,7 +30,7 @@ import { dedupeDuplicateBodies, renderAlwaysApply, renderRulebook } from './prom
 import { RuleSession, toolPaths, toolSnapshot } from './session.ts'
 import { RuleSessionStore } from './sessions.ts'
 import type { Rule } from './rule.ts'
-import { createRuleTool, type RuleLookup, type RuleToggle } from './tool.ts'
+import { createRuleTool, ruleFilePath, type RuleLookup, type RuleToggle } from './tool.ts'
 import { TtsrManager, type TtsrSettings } from './ttsr.ts'
 
 /** Prompt order band for domain rules, above the tool-guidance band. */
@@ -141,7 +142,63 @@ export function apply(ctx: Context, config: Config): void {
   }
 
   /**
-   * Registered workspaces, read through the host's own registry.
+   * Write a new rule file into the calling session's workspace.
+   *
+   * Deliberately not `writeRule`: that one overwrites a file discovery already
+   * found, and refuses when nothing is there. A rule the model just proposed
+   * has no file yet, so this writes into `.omp/rules/` — the project's own
+   * directory, where the rule shows up in the audit and can be edited or
+   * deleted like any other project rule.
+   *
+   * The file is checked for existence rather than merged with the discovered
+   * set: discovery skips a file it cannot parse, so a rule that failed to load
+   * would be invisible to a name check and silently overwritten by this.
+   */
+  const createRule = async (
+    exec: ToolRunContext,
+    name: string,
+    frontmatter: string,
+    body: string,
+  ): Promise<ToggleResult> => {
+  // The session's own workspace, not the audit's: the model is writing for the
+  // conversation it is in, and the audit panel may be pointed somewhere else.
+  const cwd = exec.agent?.session?.header?.cwd
+  if (typeof cwd !== 'string' || cwd === '') {
+    return { ok: false, guidance: 'this session has no workspace, so there is nowhere to write the rule.', disabled: [] }
+  }
+  const dir = join(cwd, '.omp', 'rules')
+  const path = ruleFilePath(dir, name)
+  try {
+    // `wx` fails rather than truncating, and the directory may not exist yet:
+    // a workspace with no rules has no `.omp/rules/` at all.
+    await mkdir(dir, { recursive: true })
+    // Exclusive create: a file that is already there is never truncated, even
+    // by a rule whose name discovery never reported.
+    const handle = await open(path, 'wx')
+    try {
+      await handle.writeFile(`---\n${frontmatter.trim()}\n---\n\n${body.trim()}\n`, 'utf8')
+    } finally {
+      await handle.close()
+    }
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code
+    if (code === 'EEXIST') {
+      return { ok: false, guidance: `${path} already exists. Edit that file rather than replacing it.`, disabled: [] }
+    }
+    return {
+      ok: false,
+      guidance: `could not write ${path}: ${error instanceof Error ? error.message : String(error)}`,
+      disabled: [],
+    }
+  }
+  // The snapshot this turn was built from does not contain the new rule, so
+  // saying it applies now would be a lie. Rebuild before the next step runs.
+  sessions.rebuildAll()
+  return { ok: true, disabled: [...liveTtsr(config).disabledRules] }
+}
+
+/**
+ * Registered workspaces, read through the host's own registry.
    *
    * `ctx.get` rather than property access: the workspace service is not in this
    * plugin's `inject`, and Cordis refuses undeclared service reads outright.
@@ -314,6 +371,7 @@ export function apply(ctx: Context, config: Config): void {
       tool => ctx.tools.register(tool),
       exec => lookup(sessions, exec.agent),
       () => toggle(config, persistDisabled),
+      exec => ({ create: (name, frontmatter, body) => createRule(exec, name, frontmatter, body) }),
     )
 
     // Warm path only. Every other surface below falls back to building on

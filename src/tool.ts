@@ -15,20 +15,107 @@
 
 import { defineTool, type ToolDefinition, type ToolRunContext } from '@deepseek-ai/dsh-tools'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
+import { join } from 'node:path'
 import type { Rule } from './rule.ts'
+import type { ToggleResult } from './audit.ts'
+import { parseFrontmatter } from './frontmatter.ts'
 
-const TOOL_DESCRIPTION = `Load the full text of one rule, list the rules in force, or turn a bundled rule off.
+/** What the tool needs in order to write a new rule file. */
+export interface RuleWriter {
+  /**
+   * Write a new rule file into the calling session's workspace.
+   *
+   * Separate from the toggle surface because this one creates a file the user
+   * has to review: the model proposes the text, the user owns the file.
+   */
+  create: (name: string, frontmatter: string, body: string) => Promise<ToggleResult>
+}
+
+/** Why a proposed rule name cannot become a file. */
+export type NameRejection = 'empty' | 'path' | 'exists'
+
+/**
+ * Decide whether a model-supplied rule name can become a file.
+ *
+ * The name becomes a filename, so anything that could reach outside
+ * `.omp/rules/` is refused rather than normalised: a rule called
+ * `../../.ssh/authorized_keys` is a path, not a name. The same reason
+ * `readRule` refuses an empty workspace — resolving against the process
+ * directory would put a write outside the workspace the session is in.
+ *
+ * @returns the reason to refuse, or undefined when the name is usable.
+ */
+export function rejectRuleName(name: string, taken: ReadonlySet<string>): NameRejection | undefined {
+  if (name.trim() === '') return 'empty'
+  // Separators, parent references, and a leading dot are all ways a name stops
+  // being a name. Checked before the path test so `..` is not reported as an
+  // ordinary separator.
+  if (name.includes('/') || name.includes('\\') || name.includes('..') || name.startsWith('.')) return 'path'
+  if (/[<>:"|?*\0]/.test(name)) return 'path'
+  if (taken.has(name)) return 'exists'
+  return undefined
+}
+
+/** Prose for each refusal, addressed to the model that proposed the name. */
+const NAME_REFUSAL: Readonly<Record<NameRejection, string>> = {
+  empty: 'a rule name cannot be empty.',
+  path: 'a rule name becomes a filename, so it cannot contain a path separator, "..", a leading dot, or any of < > : " | ? * .',
+  exists: 'a rule with this name already exists. Edit that file instead of creating a second rule with the same name — two rules of one name, and only one of them applies.',
+}
+
+/** Join a validated name onto the workspace's rules directory. */
+export function ruleFilePath(rulesDir: string, name: string): string {
+  return join(rulesDir, `${name}.md`)
+}
+
+/**
+ * Check a proposed frontmatter block by parsing the file it would produce.
+ *
+ * The text comes from a model, so it is no more trustworthy than any other tool
+ * argument — and a rule carrying no settings at all is one that joins no bucket
+ * and never reaches the model, which is a worse outcome than a refusal the
+ * model can react to.
+ *
+ * The bar is deliberately low. `parseFrontmatter` recovers a block js-yaml
+ * rejects by reading it line by line, so malformed quoting still produces a
+ * loadable rule; refusing that would block a working rule over the same
+ * tolerance the reader applies to every other file on disk.
+ *
+ * @returns prose to report to the model, or undefined when the file would load.
+ */
+export function refuseUnloadableRule(frontmatter: string, body: string): string | undefined {
+  const file = `---\n${frontmatter.trim()}\n---\n\n${body.trim()}\n`
+  try {
+    const parsed = parseFrontmatter(file)
+    if (Object.keys(parsed.data).length === 0) {
+      return 'The frontmatter block did not parse as YAML, so the rule would load with none of its settings. ' +
+        'Quote any value containing a colon, and use single quotes around a regex.'
+    }
+    return undefined
+  } catch (error) {
+    return `The frontmatter block is not valid YAML (${error instanceof Error ? error.message : String(error)}), ` +
+      'so the rule would not load.'
+  }
+}
+
+const TOOL_DESCRIPTION = `Load the full text of one rule, list the rules in force, create a new one, or turn a bundled rule off.
 
 Actions:
 - load (default): read one rule's body. Names come from the domain-rules listing
   in your system prompt. A rule's body is not in context until you load it.
 - list: report every rule in this session, whether it is in force, and why not.
+- create: write a new rule file into this workspace's .omp/rules/. Use it when
+  the user states a constraint worth keeping — write the rule, then say what you
+  wrote and where, so they can review or delete it. Do not create a rule to
+  restate something already in your system prompt.
 - enable / disable: turn one bundled rule off or on. Applies to the next step.
 
 Parameters:
-- action: one of load, list, enable, disable. Defaults to load.
+- action: one of load, list, create, enable, disable. Defaults to load.
 - name: exact rule name (addressed as rule://<name>). Required for load,
-  enable, and disable; ignored by list.`
+  enable, and disable; ignored by list. For create, the new rule's name.
+- frontmatter: the YAML frontmatter block, without the --- fences. For create.
+- body: the rule text the model should read. For create.`
 
 /** One addressable snapshot for a single agent. */
 export interface RuleSnapshot {
@@ -118,6 +205,7 @@ export function createRuleTool(
   registerTool: (tool: ToolDefinition) => () => void,
   resolve: (exec: ToolRunContext) => RuleLookup,
   toggle: () => RuleToggle,
+  write: (exec: ToolRunContext) => RuleWriter,
 ): { name: string; dispose: () => void } {
   const dispose = registerTool(defineTool({
     name: 'rule',
@@ -130,6 +218,14 @@ export function createRuleTool(
       name: {
         type: 'string',
         description: 'Exact rule name from the listing (addressed as rule://<name>).',
+      },
+      frontmatter: {
+        type: 'string',
+        description: 'YAML frontmatter block without the --- fences. Required for create.',
+      },
+      body: {
+        type: 'string',
+        description: 'The rule text itself. Required for create.',
       },
     },
     output: {
@@ -155,6 +251,24 @@ export function createRuleTool(
 
       if (action === 'list') {
         return renderList(snapshot, toggle().toggleable)
+      }
+
+      if (action === 'create') {
+        const frontmatter = args.frontmatter ?? ''
+        const body = args.body ?? ''
+        if (body.trim() === '') {
+          return 'Cannot create a rule with an empty body: there would be nothing for the model to read.'
+        }
+        const refusal = rejectRuleName(name, new Set(snapshot.all.map(rule => rule.name)))
+        if (refusal !== undefined) {
+          return `Cannot create a rule: ${NAME_REFUSAL[refusal]}`
+        }
+        const unloadable = refuseUnloadableRule(frontmatter, body)
+        if (unloadable !== undefined) return unloadable
+        const written = await write(exec).create(name, frontmatter, body)
+        if (!written.ok) return written.guidance ?? `Could not create rule "${name}".`
+        return `Created rule "${name}". It applies from the next step. ` +
+          'Tell the user where it was written so they can review, edit, or delete it.'
       }
 
       if (action === 'enable' || action === 'disable') {

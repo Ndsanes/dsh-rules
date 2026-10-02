@@ -276,6 +276,32 @@ describe('client half', () => {
     expect(registrations.map(entry => entry.descriptor.name)).toContain('plugins.detail.section')
   })
 
+  it('registers the audit panel as a tab on the Settings page too', () => {
+    // Settings is where a reader goes to configure a plugin, so the panel that
+    // says which rules are in force belongs there as well as on the detail page.
+    // `settings.plugins.tab` is a tab inside the Plugins section rather than a
+    // top-level navigation entry — the same slot the host puts its own
+    // read-only plugin inventory in.
+    const tabs = registrations.filter(entry => entry.descriptor.name === 'settings.plugins.tab')
+    expect(tabs.map(entry => entry.descriptor.id)).toEqual(['dsh-rules'])
+    const descriptor = tabs[0]?.descriptor as { order?: number; label?: () => string } | undefined
+    // What the host actually consumes for a tab: an ordering and a label.
+    expect(descriptor?.order).toBeTypeOf('number')
+    // A label is a thunk the host calls outside a render, so it must not reach
+    // for a hook — reading the locale has to work with no React above it.
+    expect(descriptor?.label?.()).toBeTruthy()
+    expect(descriptor?.label?.()).not.toContain('undefined')
+  })
+
+  it('renders the panel in the settings tab, where there is no subject', () => {
+    // A settings tab is a page of its own, not a view of one plugin row, so the
+    // host passes no subject. The detail-page subject check would render
+    // nothing there — the panel would be present in the registry and absent from
+    // the page a reader actually opens.
+    const html = render('settings.plugins.tab', { report: SAMPLE_REPORT }, 'dsh-rules')
+    expect(html).toContain('Rule management')
+  })
+
   it('registers two detail sections and leaves the config form slot to the platform', () => {
     const details = registrations.filter(entry => entry.descriptor.name === 'plugins.detail.section')
     expect(details.map(entry => entry.descriptor.id)).toEqual(['dsh-rules'])

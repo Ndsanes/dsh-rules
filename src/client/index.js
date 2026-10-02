@@ -150,6 +150,21 @@ window.__ModuleLoader__.load({
       return useSyncExternalStore(subscribe, getSnapshot, getSnapshot).active
     }
 
+    /**
+     * Read the active locale without a hook.
+     *
+     * A slot `label` is a thunk the host calls, not a component, so it cannot
+     * call `useLocale` — that would be a hook outside a render, and React throws
+     * on it. `getSnapshot` is the same read `useLocale` subscribes to, taken
+     * once here so a label stays a plain string.
+     */
+    function localeNow(ctx) {
+      const locale = ctx && ctx.locale
+      if (locale === undefined || typeof locale.getSnapshot !== 'function') return EN_LOCALE
+      const snapshot = locale.getSnapshot()
+      return snapshot === undefined || snapshot === null ? EN_LOCALE : snapshot.active
+    }
+
     /** Family a bundled rule belongs to, taken from its name prefix. */
     function familyOf(name) {
       const dash = name.indexOf('-')
@@ -1341,13 +1356,17 @@ window.__ModuleLoader__.load({
           error !== undefined && h('p', { style: styles.error }, error)))
     }
 
-    /** The detail-page section: the audit, plus where the rest of the rules come from. */
+    /** The audit panel: where the rules came from, why each is in force, and the toggles. */
     function RulesSection(props) {
       // The hook runs before the subject check: returning early would make the
       // hook count depend on the page, which React rejects outright.
       const locale = useLocale(props.ctx)
       const t = translator(locale)
-      if (!ownsSubject(props.subject)) return null
+      // `settings.plugins.tab` entries carry no subject — that slot is a page of
+      // its own, not a view of one plugin row — so the subject check applies
+      // only where a subject exists. Without this the panel would render on the
+      // Plugins page and be absent from the tab a reader actually navigates to.
+      if (props.subject !== undefined && !ownsSubject(props.subject)) return null
       return h(React.Fragment, null,
         h(RuleAudit, { ctx: props.ctx, report: props.report, workspaces: props.workspaces }),
         // The keyed `plugins.row.config` slot belongs to the platform's own form
@@ -1394,6 +1413,23 @@ window.__ModuleLoader__.load({
         await ctx.inject(['remote.dshRules', 'locale'], root => {
           root.slots.inject('plugins.detail.section', () => root.slots.register(
             { name: 'plugins.detail.section', id: 'dsh-rules' },
+            props => RulesSection({ ...props, ctx: root })))
+          // The same panel on the Settings page, which is where a reader goes
+          // to configure a plugin. `settings.plugins.tab` is a tab inside the
+          // Plugins section rather than a top-level navigation entry, and it is
+          // where the host puts its own read-only plugin inventory — so this is
+          // the same shape the platform already expects. `order` places it after
+          // the host's own tab. `locale` is a registrant-scoped namespace under
+          // `settings.`, following the host's `settings.pluginInventory`
+          // convention rather than naming the section itself.
+          root.slots.inject('settings.plugins.tab', () => root.slots.register(
+            {
+              name: 'settings.plugins.tab',
+              id: 'dsh-rules',
+              order: 50,
+              label: () => translator(localeNow(root))('togglesTitle'),
+              locale: 'settings.dshRules',
+            },
             props => RulesSection({ ...props, ctx: root })))
         })
       } catch (error) {

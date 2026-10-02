@@ -40,6 +40,16 @@ export function renderRulebook(rules: readonly Rule[]): string {
     ...lines,
     'Before acting on a rule subject, load its full text: call the `rule` tool',
     'with that rule name (addressed as rule://<name>). Its body is not in context until you load it.',
+    // The write path exists but nothing reaches it unless the model is told the
+    // rules are its to extend. Without this the tool's `create` action is
+    // unreachable in practice: the model can read rules and obey them, and has
+    // no reason to believe a correction belongs in one.
+    'When the user states a constraint that will still hold next week — how they',
+    'want something done, what must never happen, a convention this project follows',
+    '— write it down instead of only obeying it this once. Call the `rule` tool with',
+    'action "create", a name, a `frontmatter` block and a `body`, then tell the user',
+    'where it was written so they can review, edit, or delete it.',
+    'Do not create a rule that only restates what is already in this prompt.',
     '</domain-rules>',
   ].join('\n')
 }
