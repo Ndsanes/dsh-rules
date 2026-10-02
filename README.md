@@ -266,11 +266,12 @@ Two axes are independent, so all four moves are expressible:
 | `.omp` → dsh, same scope | `toConvention: "dsh"` |
 | dsh → `.omp`, same scope | `fromConvention: "dsh"`, `toConvention: "omp"` |
 | project → global | `toScope: "global"` |
-| global → project | `scope: "global"` |
+| global → project | `scope: "global"`, `toScope: "project"` |
 
-`toScope` defaults to the source's scope, so a move that changes only one axis
-takes one argument. Both can change at once — project OMP rules onto the global
-dsh directory, say — which is a real arrangement and works like any other.
+Both destination arguments are optional and **default to leaving that axis
+alone**: omit `toScope` to keep the scope, omit `toConvention` to keep the
+convention. A move that changes one axis takes one argument; both can change at
+once, which is a real arrangement and works like any other.
 
 A migration is a change of directory, not of meaning: both sides are read by
 discovery, so the name, the body and what the rule does are untouched. Three

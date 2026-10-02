@@ -244,6 +244,23 @@ describe('client half', () => {
     expect(() => loadClientBundle()).not.toThrow()
   })
 
+  it('declares the published package name as its loader envelope id', () => {
+    // The loader resolves the envelope id to a package. Leaving it on the bare
+    // `dsh-rules` reads as harmless because that is also this plugin's profile
+    // row id, but the envelope id is a package lookup and the bare name is a
+    // different, unrelated plugin on the registry — the browser half then fails
+    // to import and the host reports only "import failed".
+    const source = readFileSync(join(process.cwd(), 'src', 'client', 'index.js'), 'utf8')
+    // Read out of the envelope specifically: `id: 'dsh-rules'` appears twice
+    // further down and is correct there, naming this plugin's own profile row.
+    const envelope = /__ModuleLoader__\.load\(\{[\s\S]*?\bid: '([^']*)'/.exec(source)
+    expect(envelope?.[1]).toBe(PACKAGE_NAME)
+    expect(source).toContain(`var PACKAGE_NAME = '${PACKAGE_NAME}'`)
+    // And the row id is still the deployment-local one, kept apart from the
+    // package name so the two cannot drift into each other.
+    expect(source).toContain(`var ROW_ID = '${ROW_ID}'`)
+  })
+
   it('registers itself under the package name and asks for the remote service', () => {
     // Read from package.json rather than repeating the literal: the loader
     // resolves a bundle row to the module it named, so the client half's name,

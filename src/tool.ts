@@ -150,8 +150,8 @@ Parameters:
 - scope: project (default) or global. Project rules travel with the workspace;
   global ones apply to every workspace. For create, and the source of migrate.
 - fromConvention: omp (default) or dsh. Only for migrate.
-- toScope: project or global, defaulting to the source scope. Only for migrate.
-- toConvention: omp or dsh. Only for migrate.`
+- toScope: project or global. Omit to leave the scope unchanged. Only for migrate.
+- toConvention: omp or dsh. Omit to keep the source convention. Only for migrate.`
 
 /** One addressable snapshot for a single agent. */
 export interface RuleSnapshot {
@@ -273,7 +273,7 @@ export function createRuleTool(
       },
       toScope: {
         type: 'string',
-        description: 'Destination scope: project or global. Defaults to the source scope. Only for migrate.',
+        description: 'Destination scope: project or global. Omit to keep the source scope. Only for migrate.',
       },
       toConvention: {
         type: 'string',
@@ -327,16 +327,27 @@ export function createRuleTool(
 
       if (action === 'migrate') {
         // Two independent axes. `scope` and `fromConvention` name the source,
-        // `toScope` and `toConvention` the destination; `toScope` defaults to
-        // the source's, so a convention change within one scope needs one
-        // argument and a scope change needs two.
+        // `toScope` and `toConvention` the destination.
+        //
+        // Both destination fields default to the source's, and that matters:
+        // defaulting `toConvention` to one fixed value meant a caller asking
+        // only to widen a rule's scope silently moved the files into the other
+        // convention's directory as well. A migration changes files on disk, so
+        // an argument left out has to mean "unchanged", never "whatever this
+        // plugin defaults to".
         const from: RuleLocation = {
           scope: args.scope === 'global' ? 'global' : 'project',
           convention: args.fromConvention === 'dsh' ? 'dsh' : 'omp',
         }
         const to: RuleLocation = {
-          scope: args.toScope === 'global' ? 'global' : from.scope,
-          convention: args.toConvention === 'omp' ? 'omp' : 'dsh',
+          // `undefined` means "unchanged"; anything else is honoured literally.
+          // Treating every non-`global` value as absent made an explicit
+          // `toScope: "project"` fall back to the source, so global → project
+          // was the one direction that could not be expressed at all.
+          scope: args.toScope === undefined ? from.scope
+            : args.toScope === 'global' ? 'global' : 'project',
+          convention: args.toConvention === 'dsh' ? 'dsh'
+            : args.toConvention === 'omp' ? 'omp' : from.convention,
         }
         return renderMigration(await write(exec).migrate(from, to))
       }

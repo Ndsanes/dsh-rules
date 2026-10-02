@@ -11,24 +11,35 @@
  */
 
 window.__ModuleLoader__.load({
-  id: 'dsh-rules',
+  /**
+   * The loader resolves this id to a package, so it is the published name.
+   *
+   * It reads as harmless to leave it on the bare `dsh-rules` because that is
+   * also this plugin's profile row id, but the two mean different things: the
+   * row id is deployment-local, while the envelope id is a package lookup, and
+   * on the registry the bare name is a different, unrelated plugin. When the
+   * two disagree the browser half fails to import and the host reports only
+   * "import failed". Written as a literal rather than a shared binding because
+   * the module loader evaluates the envelope on its own; the two occurrences
+   * are kept equal by a test that reads the manifest.
+   */
+  id: '@ndsanes/dsh-rules',
   factory: require => {
     var module = { exports: {} }
     var exports = module.exports
     Object.defineProperty(exports, Symbol.toStringTag, { value: 'Module' })
 
+    /** This plugin's npm package name, which the Plugins page matches on. */
+    var PACKAGE_NAME = '@ndsanes/dsh-rules'
+
     /**
-     * Identity of this plugin, in the two forms the host uses.
+     * The row id `cordis.patch.yml` inserts.
      *
-     * The Plugins page mounts this section by matching the *package* name, so
-     * it has to be the scoped npm name — the bare `dsh-rules` is a different
-     * package on the registry, and matching it would also mean mounting
-     * alongside that one if both were ever installed. The bare name is kept
-     * separately because it is also this plugin's local row id: that one is
-     * deployment-local and is what `cordis.patch.yml` inserts.
+     * Deployment-local rather than the package name, and kept apart from it so
+     * the two cannot drift: a subject arrives carrying a row id, and the Plugins
+     * page matches this plugin's own row by it.
      */
-    const PACKAGE_NAME = '@ndsanes/dsh-rules'
-    const ROW_ID = 'dsh-rules'
+    var ROW_ID = 'dsh-rules'
 
     const React = require('react')
     const { useCallback, useEffect, useMemo, useState, useSyncExternalStore } = React

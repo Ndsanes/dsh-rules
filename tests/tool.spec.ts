@@ -138,12 +138,21 @@ describe('createRuleTool', () => {
 
     it('moves project rules to the global scope, keeping the convention', async () => {
       // The two axes are independent: a user asking to "make these rules apply
-      // everywhere" changes scope and nothing else. Defaulting the convention
-      // from the source is what makes that a one-argument move.
+      // everywhere" changes scope and nothing else. An omitted argument has to
+      // mean "unchanged" — defaulting the convention instead would move the
+      // files into the other convention's directory as a side effect of a
+      // request that never mentioned conventions.
       active = []
       const { tool } = captureTool()
       await run(tool, { action: 'migrate', scope: 'project', toScope: 'global' })
-      expect(migrated[0]?.to).toEqual({ scope: 'global', convention: 'dsh' })
+      expect(migrated[0]?.to).toEqual({ scope: 'global', convention: 'omp' })
+    })
+
+    it('keeps the source convention when moving dsh rules out of a scope', async () => {
+      active = []
+      const { tool } = captureTool()
+      await run(tool, { action: 'migrate', scope: 'global', fromConvention: 'dsh', toScope: 'project' })
+      expect(migrated[0]?.to).toEqual({ scope: 'project', convention: 'dsh' })
     })
 
     it('moves rules and changes convention at the same time', async () => {

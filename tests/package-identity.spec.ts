@@ -57,7 +57,7 @@ describe('published package name', () => {
     // artifact, and this spec must fail when the source drifts, not when
     // someone forgets to rebuild.
     const source = readRepoFile('src/client/index.js')
-    expect(source).toContain(`const PACKAGE_NAME = '${packageName}'`)
+    expect(source).toContain(`PACKAGE_NAME = '${packageName}'`)
     expect(source).toContain('exports.name = PACKAGE_NAME')
   })
 
