@@ -5,3 +5,8 @@ lib/
 
 # Generated from src/builtin-rules/*.md by scripts/embed-builtin-rules.mts
 src/generated/
+
+# Local notes for submitting to the registry; they live in the marketplace
+# repo, not here.
+market-PR.md
+market-entry.yml
