@@ -85,6 +85,8 @@ The migration body.
 
 图表之下是明细列表：
 
+| 控件 | 作用 |
+|---|---|
 | 按来源筛选 | 每种约定一个条目，附带计数：`Bundled with the plugin 27`、`.omp/rules 2`，以及该 profile 贡献的其他提供方 |
 | 按文本筛选 | 匹配规则名、描述与来源路径 |
 | 每行 | 名称、是否生效、描述，以及 `source · path` |

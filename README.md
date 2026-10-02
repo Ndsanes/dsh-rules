@@ -144,6 +144,8 @@ name a rule this workspace never discovered. The page keeps the two apart —
 
 Below the charts, the detail list:
 
+| Control | What it does |
+|---|---|
 | Filter by source | one chip per convention, with counts: `Bundled with the plugin 27`, `.omp/rules 2`, and any other provider the profile contributes |
 | Filter by text | matches rule name, description, and source path |
 | Per row | name, whether it is in force, its description, and `source · path` |
