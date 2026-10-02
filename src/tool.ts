@@ -277,7 +277,7 @@ export function createRuleTool(
       },
       toConvention: {
         type: 'string',
-        description: 'Which convention to move rules onto: omp or dsh. Only for migrate.',
+        description: 'Destination convention: omp or dsh. Omit to keep the source convention. Only for migrate.',
       },
     },
     output: {

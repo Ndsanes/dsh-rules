@@ -18,6 +18,13 @@ dsh plugin --profile <name> add @ndsanes/dsh-rules
 Then add the row to the profile's `cordis.patch.yml` if it is not already
 applied by the package's own bundle patch, and reload the profile.
 
+If the profile already carries this plugin under a different package name — a
+stale `link:` dependency or a `dsh.profile.bundles` entry — remove it from
+**both** `dependencies` and `dsh.profile.bundles` before adding. The loader
+resolves a bundle row by the *current* package name, so a leftover entry points
+at a module the profile no longer has, and the boot reports only
+`import failed`. Nothing on the plugin side can diagnose that.
+
 ## Rule files
 
 A rule is a Markdown file with YAML frontmatter:
