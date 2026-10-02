@@ -13,6 +13,7 @@
     "url": "https://github.com/Ndsanes/dsh-rules/issues"
   },
   "main": "lib/index.mjs",
+  "types": "lib/types/index.d.ts",
   "exports": {
     "./client": {
       "default": "./client/client.js"
@@ -20,6 +21,7 @@
     "./src/*": "./src/*",
     "./package.json": "./package.json",
     ".": {
+      "types": "./lib/types/index.d.ts",
       "default": "./lib/index.mjs"
     },
     "./typert": {
@@ -46,9 +48,9 @@
   "scripts": {
     "embed:rules": "node --experimental-strip-types scripts/embed-builtin-rules.mts",
     "prebuild": "pnpm run embed:rules",
-    "build": "tsc -b && tsdown && node scripts/build-client.mjs",
+    "build": "tsdown && tsc -b && node scripts/build-client.mjs",
     "prepack": "pnpm run build",
-    "prepare": "node --experimental-strip-types scripts/embed-builtin-rules.mts && tsdown && node scripts/build-client.mjs",
+    "prepare": "pnpm run build",
     "pretest": "pnpm run embed:rules",
     "test": "vitest run",
     "pretypecheck": "pnpm run embed:rules",

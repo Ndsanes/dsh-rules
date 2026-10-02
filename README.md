@@ -55,16 +55,20 @@ single-quoted form is the one to write.
 
 ## Discovery
 
-| Provider | Priority | Sources |
+| Provider | Priority | Sources, most specific first |
 |---|---|---|
 | `native` | 100 | `<cwd>/.omp/rules/*.md(c)`, `<userRulesDir>/rules/*.md(c)`, sticky `RULES.md` |
 | `omp-plugins` | 90 | `rules/` under each configured `pluginRoots` entry |
 | `agents` | 70 | `.agent/rules`, `.agents/rules`, project walk then user |
-| `cursor` | 50 | `~/.cursor/rules`, `<cwd>/.cursor/rules` |
-| `windsurf` | 50 | `~/.codeium/windsurf/memories/global_rules.md`, `<cwd>/.windsurf/rules` |
+| `cursor` | 50 | `<cwd>/.cursor/rules`, `~/.cursor/rules` |
+| `windsurf` | 50 | `<cwd>/.windsurf/rules`, `~/.codeium/windsurf/memories/global_rules.md` |
 | `cline` | 40 | nearest `.clinerules`, file or directory |
 | `github` | 30 | `.github/instructions/*.instructions.md`, `applyTo` normalized |
 | `builtin-defaults` | 1 | OMP's bundled rules, shipped in `src/builtin-rules/` |
+
+Order within a row is load-bearing: identity is the rule name alone and the
+merge keeps the first rule to claim it, so a user's `~/.cursor/rules/style.md`
+loses to the workspace's `<cwd>/.cursor/rules/style.md` of the same name.
 
 ### Bundled rules
 

@@ -11,6 +11,8 @@ import * as frontmatter from '../src/client/frontmatter.js'
 import { createRoot } from 'react-dom/client'
 import { act } from 'react'
 
+import manifest from '../package.json' with { type: 'json' }
+
 /**
  * Drive the shipped browser half through a real DOM.
  *
@@ -238,7 +240,7 @@ async function render(options: {
   document.body.append(container)
   const root = createRoot(container)
   await act(async () => { root.render(React.createElement(section as never, {
-      subject: { kind: 'row', row: { moduleName: 'dsh-rules', rowId: 'dsh-rules' } },
+      subject: { kind: 'row', row: { moduleName: manifest.name, rowId: 'dsh-rules' } },
     })) })
 
   return {
