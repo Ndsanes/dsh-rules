@@ -1204,7 +1204,22 @@ window.__ModuleLoader__.load({
         }
       }
 
-      const setField = (key, value) => { rewrite({ ...fields, [key]: value }, body, parsed.frontmatterLines) }
+      /**
+       * Set a field, or drop it entirely when the value is `undefined`.
+       *
+       * "Dropped" has to mean the key is absent. Building the next object by
+       * spreading and assigning `undefined` leaves the key present, and the
+       * serializer then reads it as dropped while rewriting a block that already
+       * had it, meets the same key again when writing fields the original file
+       * did not have, and refuses — a text field has no undefined form. One
+       * place decides this so every caller is covered.
+       */
+      const setField = (key, value) => {
+        const next = { ...fields }
+        if (value === undefined) delete next[key]
+        else next[key] = value
+        rewrite(next, body, parsed.frontmatterLines)
+      }
 
       const specs = require('./frontmatter.js').FIELD_SPECS
       // Written out rather than derived from the field name: the page reads in
@@ -1273,11 +1288,30 @@ window.__ModuleLoader__.load({
                         event.target.value.split('\n').map(line => line.trim()).filter(line => line !== ''),
                       ),
                     })
-                    : h('input', {
-                      style: styles.fieldInput, type: 'text',
-                      value: typeof fields[spec.key] === 'string' ? fields[spec.key] : '',
-                      onChange: event => setField(spec.key, event.target.value),
-                    }))),
+                    // A field with a fixed vocabulary gets a select. As a free
+                    // text box it invited typos, and a misspelled `interruptMode`
+                    // is not rejected — it falls back to the default, which is the
+                    // most aggressive value, so a rule written to stay quiet
+                    // ends up the one that interrupts everything.
+                    : spec.options !== undefined
+                      ? h('select', {
+                        style: styles.fieldInput,
+                        value: typeof fields[spec.key] === 'string' ? fields[spec.key] : '',
+                        onChange: event => setField(spec.key, event.target.value === '' ? undefined : event.target.value),
+                      }, [
+                        // An absent value is not the same as an empty one: it is
+                        // what lets the rule inherit the profile default, so the
+                        // blank option must stay selectable and must serialise to
+                        // nothing rather than to an empty string.
+                        h('option', { key: '', value: '' }, t('fieldUnset')),
+                        ...spec.options.map(option =>
+                          h('option', { key: option, value: option }, option)),
+                      ])
+                      : h('input', {
+                        style: styles.fieldInput, type: 'text',
+                        value: typeof fields[spec.key] === 'string' ? fields[spec.key] : '',
+                        onChange: event => setField(spec.key, event.target.value),
+                      }))),
               h('label', { style: styles.field },
                 h('span', { style: styles.fieldName }, t('fieldBody')),
                 h('span', { style: styles.fieldHelp }, t('helpBody')),

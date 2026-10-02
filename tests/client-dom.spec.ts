@@ -368,13 +368,16 @@ async function typeIn(control: HTMLInputElement | HTMLTextAreaElement, text: str
 function fieldIn(
   editor: HTMLElement,
   name: string,
-): { control: HTMLInputElement | HTMLTextAreaElement; help: string; label: HTMLElement } {
+): { control: HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement; help: string; label: HTMLElement } {
   const labels = [...editor.querySelectorAll('label')]
   const label = labels.find(node => node.querySelector('span')?.textContent === name)
   if (label === undefined) {
     throw new Error(`the editor has no field named ${name} among: ${labels.map(node => node.querySelector('span')?.textContent).join(' | ')}`)
   }
-  const control = label.querySelector<HTMLInputElement | HTMLTextAreaElement>('input, textarea')
+  // A select is a control too: fields with a fixed vocabulary render as one, and
+  // a helper that only knew input and textarea reported them as having no
+  // control at all.
+  const control = label.querySelector<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>('input, textarea, select')
   if (control === null) throw new Error(`the field named ${name} carries no control`)
   return { control, help: label.querySelectorAll('span')[1]?.textContent?.trim() ?? '', label }
 }
@@ -684,6 +687,19 @@ describe('editing one rule in the browser', () => {
   }
 
   /**
+   * A rule carrying a field with a fixed vocabulary.
+   *
+   * `interruptMode` accepts exactly four values. As a free text box it invited
+   * typos, and a misspelling is not rejected by the parser — it falls back to
+   * the profile default, which is the most aggressive value, so a rule written
+   * to stay quiet ends up interrupting everything.
+   */
+  const MODE_FILE = {
+    ...FILE,
+    content: '---\ndescription: How the docs read\ninterruptMode: prose-only\n---\n\nBody\n',
+  }
+
+  /**
    * A rule whose frontmatter the parser genuinely cannot represent: a nested
    * mapping under a *known* field. An unknown key is not one of these — those
    * are preserved verbatim and the form still opens, which is the whole point.
@@ -740,6 +756,51 @@ describe('editing one rule in the browser', () => {
     // Both arguments, in order: the name decides the file, so a write that sent
     // only the text would land somewhere else or nowhere.
     expect(view.writes()).toEqual([['documentation', '---\ndescription: d\n---\nEdited body\n']])
+    view.dispose()
+  })
+
+  it('offers a fixed-vocabulary field as a select, and unset drops the line', async () => {
+    const view = await render({ reply: () => ({ ok: true }), rules: PROJECT_RULES, file: MODE_FILE })
+    await settle()
+
+    await act(async () => { editIn(view.container, 'documentation')!.click() })
+    await settle()
+    const editor = togglesIn(view.container).querySelector('[data-dsh-rules="editor"]') as HTMLElement
+
+    const mode = fieldIn(editor, 'interruptMode').control
+    // Not a text box: every value the parser accepts, and nothing it does not.
+    expect(mode.tagName).toBe('SELECT')
+    expect([...mode.querySelectorAll('option')].map(option => option.value))
+      .toEqual(['', 'never', 'prose-only', 'tool-only', 'always'])
+    expect((mode as HTMLSelectElement).value).toBe('prose-only')
+
+    // Choosing a value writes it as a normal frontmatter line.
+    await act(async () => {
+      const select = mode as HTMLSelectElement
+      select.value = 'tool-only'
+      select.dispatchEvent(new Event('change', { bubbles: true }))
+    })
+    await settle()
+    expect(fieldIn(editor, 'interruptMode').control).toBeDefined()
+
+    // Choosing the blank option removes the field rather than writing an empty
+    // one. `interruptMode: ''` would parse as unrecognised and fall back to the
+    // default, which is the opposite of leaving it to the profile.
+    await act(async () => {
+      const select = fieldIn(editor, 'interruptMode').control as HTMLSelectElement
+      select.value = ''
+      select.dispatchEvent(new Event('change', { bubbles: true }))
+    })
+    await settle()
+
+    const save = [...editor.querySelectorAll('button')]
+      .find(candidate => candidate.textContent?.trim() === 'Save') as HTMLButtonElement
+    await act(async () => { save.click() })
+    await settle()
+
+    // The rest of the file survives byte for byte, blank line included: only the
+    // field the reader changed is rewritten.
+    expect(view.writes()).toEqual([['documentation', '---\ndescription: How the docs read\n---\n\nBody\n']])
     view.dispose()
   })
 
