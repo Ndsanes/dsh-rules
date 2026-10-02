@@ -55,15 +55,20 @@ function currentLookup(): RuleLookup {
 
 /** The toggle surface the captured tool drives. */
 /** Rule files the stub writer records, so a create can be asserted on. */
-let created: { name: string; frontmatter: string; body: string }[] = []
+let created: { scope: string; name: string; frontmatter: string; body: string }[] = []
 let createGuidance = ''
+let migrated: { scope: string; to: string }[] = []
 
 function currentWriter(): RuleWriter {
   return {
-    create: async (name, frontmatter, body) => {
+    create: async (scope, name, frontmatter, body) => {
       if (createGuidance !== '') return { ok: false, guidance: createGuidance, disabled: [] }
-      created.push({ name, frontmatter, body })
-      return { ok: true, disabled: [] }
+      created.push({ scope, name, frontmatter, body })
+      return { ok: true, disabled: [], path: `/tmp/${scope}/${name}.md` }
+    },
+    migrate: async (scope, to) => {
+      migrated.push({ scope, to })
+      return { from: '/from', to: '/to', moved: [], empty: true }
     },
   }
 }
@@ -99,7 +104,34 @@ describe('createRuleTool', () => {
   })
 
   describe('creating a rule', () => {
-    beforeEach(() => { created = []; createGuidance = '' })
+    beforeEach(() => { created = []; createGuidance = ''; migrated = [] })
+
+    it('routes a global-scope rule to the global directory', async () => {
+      active = []
+      const { tool } = captureTool()
+      await run(tool, {
+        action: 'create', scope: 'global', name: 'everywhere',
+        frontmatter: 'description: d', body: 'b',
+      })
+      expect(created[0]?.scope).toBe('global')
+    })
+
+    it('reports the absolute path it wrote', async () => {
+      // The model has to be able to tell the user where the file landed; a
+      // message naming only the rule leaves them unable to review or delete it.
+      active = []
+      const { tool } = captureTool()
+      const out = await run(tool, { action: 'create', name: 'x', frontmatter: 'description: d', body: 'b' })
+      expect(out).toContain('/tmp/project/x.md')
+    })
+
+    it('migrates rules onto the requested convention', async () => {
+      active = []
+      const { tool } = captureTool()
+      const out = await run(tool, { action: 'migrate', scope: 'project', to: 'dsh' })
+      expect(migrated).toEqual([{ scope: 'project', to: 'dsh' }])
+      expect(out).toContain('No rule files')
+    })
 
     it('writes the file and tells the model to have it reviewed', async () => {
       active = []
@@ -111,6 +143,7 @@ describe('createRuleTool', () => {
         body: 'Check before writing one.',
       })
       expect(created).toEqual([{
+        scope: 'project',
         name: 'no-generated-files',
         frontmatter: 'description: Generated files are not committed',
         body: 'Check before writing one.',

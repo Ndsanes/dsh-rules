@@ -233,6 +233,54 @@ Three things are refused rather than written:
 The result tells the model to report where it wrote, because the file becomes
 the user's to review.
 
+### Which directory a rule lands in
+
+Two conventions are in play. OMP keeps project rules in `<cwd>/.omp/rules` and
+user rules in `~/.omp/agent/rules`. dsh has no rules directory of its own — it
+reads `<cwd>/.dsh/AGENTS.md`, `<cwd>/.dsh/skills` and the matching paths under
+`$DSH_HOME`, and nothing rule-shaped — so this plugin defines `<cwd>/.dsh/rules`
+and `$DSH_HOME/rules`, following that layout rather than inventing a third one.
+
+The choice is **OMP-first**, per scope:
+
+| Scope | OMP directory | dsh directory |
+|---|---|---|
+| project | `<cwd>/.omp/rules` | `<cwd>/.dsh/rules` |
+| global | `<userRulesDir>/rules` | `$DSH_HOME/rules` |
+
+A scope that already holds at least one rule under OMP keeps receiving OMP
+rules; one that holds none gets the dsh path. An existing but *empty* `.omp`
+directory does not count — it may belong to an unrelated tool. The two scopes
+resolve independently, so an OMP project does not make your global rules OMP.
+
+Both directories are read by discovery, so a rule is governed the same way
+wherever it sits.
+
+### Migrating between the two
+
+`rule` with `action: "migrate"` moves every rule in one scope's directory onto
+the convention named by `to` — so project → global and global → project are both
+expressible, and `.omp` → dsh and dsh → `.omp` in either direction.
+
+A migration is a change of directory, not of meaning: both sides are read by
+discovery, so the name, the body and what the rule does are untouched. Three
+things are refused rather than guessed:
+
+- **A name already taken at the destination.** Two files claiming one name
+  means only one of them applies, and the loser is invisible in the audit, so
+  the existing rule wins and the other file stays put.
+- **`RULES.md`.** Sticky rules resolve by the directory they sit in, so moving
+  the file would silently change which workspace it governs.
+- **A same-directory move**, which would otherwise report a file as moved onto
+  itself.
+
+Files land by rename where the two paths share a filesystem, and by
+copy-then-delete where they do not — a project on an external drive against a
+home directory on the internal one fails `EXDEV` otherwise. The source is
+removed only after the copy succeeds, so an interrupted move leaves the rules
+where they were. Every file is reported afterwards: what moved, and what was
+left alone.
+
 ## Enforcement
 
 On `agent/assistant-stream`, every text, reasoning, and tool-argument delta is

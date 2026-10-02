@@ -19,16 +19,33 @@ import { join } from 'node:path'
 import type { Rule } from './rule.ts'
 import type { ToggleResult } from './audit.ts'
 import { parseFrontmatter } from './frontmatter.ts'
+import type { RuleScope } from './rulesdir.ts'
+import { renderMigration, type MigrationResult } from './migrate.ts'
 
 /** What the tool needs in order to write a new rule file. */
 export interface RuleWriter {
   /**
-   * Write a new rule file into the calling session's workspace.
+   * Write a new rule file for one scope.
    *
    * Separate from the toggle surface because this one creates a file the user
    * has to review: the model proposes the text, the user owns the file.
+   *
+   * @returns the result, carrying the absolute path written on success.
    */
-  create: (name: string, frontmatter: string, body: string) => Promise<ToggleResult>
+  create: (scope: RuleScope, name: string, frontmatter: string, body: string) => Promise<RuleWriteResult>
+  /**
+   * Move rule files between the two conventions for one scope.
+   *
+   * Same reasoning as `create`: it changes files on the user's disk, so it is a
+   * separate surface the model only reaches when the user asks for the move.
+   */
+  migrate: (scope: RuleScope, to: 'omp' | 'dsh') => Promise<MigrationResult>
+}
+
+/** A write outcome that also reports where the file landed. */
+export interface RuleWriteResult extends ToggleResult {
+  /** The absolute path written, present only when `ok`. */
+  path?: string
 }
 
 /** Why a proposed rule name cannot become a file. */
@@ -98,24 +115,33 @@ export function refuseUnloadableRule(frontmatter: string, body: string): string 
   }
 }
 
-const TOOL_DESCRIPTION = `Load the full text of one rule, list the rules in force, create a new one, or turn a bundled rule off.
+const TOOL_DESCRIPTION = `Load the full text of one rule, list the rules in force, create or move one, or turn a bundled rule off.
 
 Actions:
 - load (default): read one rule's body. Names come from the domain-rules listing
   in your system prompt. A rule's body is not in context until you load it.
 - list: report every rule in this session, whether it is in force, and why not.
-- create: write a new rule file into this workspace's .omp/rules/. Use it when
-  the user states a constraint worth keeping — write the rule, then say what you
-  wrote and where, so they can review or delete it. Do not create a rule to
-  restate something already in your system prompt.
+- create: write a new rule file. Use it when the user states a constraint worth
+  keeping — write the rule, then say what you wrote and where, so they can
+  review or delete it. Do not create a rule to restate something already in your
+  system prompt. The file goes to the OMP directory when that scope already holds
+  rules there, and to dsh's own directory when it does not.
+- migrate: move rule files between OMP's directories and dsh's, for one scope
+  (project or global), onto the convention named by the 'to' argument. Use it
+  asks to move their rules. Both sides are read by discovery, so a moved rule
+  keeps its name and meaning; a rule whose name is already taken at the
+  destination is left where it is, and every file that moves is reported.
 - enable / disable: turn one bundled rule off or on. Applies to the next step.
 
 Parameters:
-- action: one of load, list, create, enable, disable. Defaults to load.
+- action: one of load, list, create, migrate, enable, disable. Defaults to load.
 - name: exact rule name (addressed as rule://<name>). Required for load,
   enable, and disable; ignored by list. For create, the new rule's name.
 - frontmatter: the YAML frontmatter block, without the --- fences. For create.
-- body: the rule text the model should read. For create.`
+- body: the rule text the model should read. For create.
+- scope: project (default) or global. Project rules travel with the workspace;
+  global ones apply to every workspace. For create and migrate.
+- to: omp or dsh. Only for migrate.`
 
 /** One addressable snapshot for a single agent. */
 export interface RuleSnapshot {
@@ -213,7 +239,7 @@ export function createRuleTool(
     parameters: {
       action: {
         type: 'string',
-        description: 'load (default), list, enable, or disable.',
+        description: 'load (default), list, create, enable, or disable.',
       },
       name: {
         type: 'string',
@@ -226,6 +252,14 @@ export function createRuleTool(
       body: {
         type: 'string',
         description: 'The rule text itself. Required for create.',
+      },
+      scope: {
+        type: 'string',
+        description: 'project (default) or global. Only for create and migrate.',
+      },
+      to: {
+        type: 'string',
+        description: 'Which convention to move rules onto: omp or dsh. Only for migrate.',
       },
     },
     output: {
@@ -265,10 +299,18 @@ export function createRuleTool(
         }
         const unloadable = refuseUnloadableRule(frontmatter, body)
         if (unloadable !== undefined) return unloadable
-        const written = await write(exec).create(name, frontmatter, body)
+        const scope: RuleScope = args.scope === 'global' ? 'global' : 'project'
+        const written = await write(exec).create(scope, name, frontmatter, body)
         if (!written.ok) return written.guidance ?? `Could not create rule "${name}".`
-        return `Created rule "${name}". It applies from the next step. ` +
-          'Tell the user where it was written so they can review, edit, or delete it.'
+        return `Created rule "${name}" (${scope} scope). It applies from the next step. ` +
+          `Written to ${written.path}. Tell the user where it went so they can review, ` +
+          'edit, or delete it.'
+      }
+
+      if (action === 'migrate') {
+        const scope: RuleScope = args.scope === 'global' ? 'global' : 'project'
+        const to = args.to === 'omp' ? 'omp' : 'dsh'
+        return renderMigration(await write(exec).migrate(scope, to))
       }
 
       if (action === 'enable' || action === 'disable') {

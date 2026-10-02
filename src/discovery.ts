@@ -12,6 +12,7 @@ import { homedir } from 'node:os'
 import { basename, dirname, join, resolve } from 'node:path'
 import { parseFrontmatter } from './frontmatter.ts'
 import { buildRuleFromMarkdown, type Rule, type RuleSource } from './rule.ts'
+import { dshRulesHome } from './rulesdir.ts'
 
 /** Roots and toggles the discovery pass reads. */
 export interface DiscoveryOptions {
@@ -155,11 +156,15 @@ function ancestors(cwd: string): string[] {
 }
 
 /**
- * Native provider: OMP's own `.omp` conventions.
+ * Native provider: OMP's own `.omp` conventions, plus dsh's.
  *
- * Order matters because sticky `RULES.md` files share one name: project rules,
- * user rules, user sticky, then the nearest project sticky, so the user sticky
- * shadows the project one and a `rules/RULES.md` shadows both.
+ * Order matters twice over. Sticky `RULES.md` files share one name: project
+ * rules, user rules, user sticky, then the nearest project sticky, so the user
+ * sticky shadows the project one and a `rules/RULES.md` shadows both. And a
+ * name that exists in both conventions resolves to one rule, so OMP's directory
+ * is read first and the dsh one only contributes names nothing else claimed —
+ * which is what makes moving rules between the two a change of directory
+ * rather than a change of meaning.
  */
 export async function loadNative(options: DiscoveryOptions): Promise<ProviderResult> {
   const warnings: string[] = []
@@ -170,6 +175,21 @@ export async function loadNative(options: DiscoveryOptions): Promise<ProviderRes
   if ((await statPath(projectOmp)).empty === false) {
     rules.push(...await rulesFromDir(join(projectOmp, 'rules'), { ...source, scope: scopeOf(options.cwd) }, warnings))
   }
+
+  // dsh's own rules directories, read on the same footing. `<cwd>/.dsh/rules`
+  // and `$DSH_HOME/rules` are ours rather than the host's — dsh ships
+  // `.dsh/skills` and nothing rule-shaped — but they follow the same layout,
+  // and a rule written there has to be discovered here or it would govern
+  // nothing. Checked without creating anything: discovery must never bring a
+  // directory into existence just by looking.
+  rules.push(...await rulesFromDir(
+    join(options.cwd, '.dsh', 'rules'),
+    { ...source, scope: scopeOf(options.cwd) },
+    warnings))
+  rules.push(...await rulesFromDir(
+    join(dshRulesHome(), 'rules'),
+    { ...source, path: join(dshRulesHome(), 'rules'), scope: '~' },
+    warnings))
 
   const userDir = options.userRulesDir
   rules.push(...await rulesFromDir(

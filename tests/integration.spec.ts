@@ -165,8 +165,9 @@ describe('rule tool on the live registry', () => {
   describe('creating a rule on disk', () => {
     const created = 'learned-no-generated-files'
 
-    it('writes the file into the session workspace, creating the directory', async () => {
-      // The workspace has no `.omp/rules/` at all, so this also covers mkdir.
+    it('writes into the dsh directory when the workspace has no OMP rules', async () => {
+      // Nothing OMP-shaped exists here, so the dsh path is used. `createRule`
+      // makes the directory, so this also covers mkdir.
       const workspace = join(await mkdtemp(join(tmpdir(), 'dsh-create-')), 'project')
       const { ctx, host } = await boot({ enabled: true, userRulesDir: join(workspace, 'no-user') }, workspace, 'create-1')
 
@@ -178,10 +179,29 @@ describe('rule tool on the live registry', () => {
       }))
 
       expect(JSON.stringify(result.value)).toContain(`Created rule \\\"${created}\\\"`)
-      const file = join(workspace, '.omp', 'rules', `${created}.md`)
+      const file = join(workspace, '.dsh', 'rules', `${created}.md`)
       expect(await readFile(file, 'utf8')).toBe(
         '---\ndescription: Generated files are not committed\n---\n\nCheck .gitignore before writing one.\n',
       )
+      await rm(dirname(workspace), { recursive: true, force: true })
+    })
+
+    it('writes into the OMP directory once that convention is in use', async () => {
+      // The choice follows what the workspace already has: one existing OMP rule
+      // is enough to make this an OMP workspace, and a new rule written under
+      // `.dsh` would then be governed by one convention and listed under
+      // another.
+      const workspace = join(await mkdtemp(join(tmpdir(), 'dsh-create-')), 'project')
+      await mkdir(join(workspace, '.omp', 'rules'), { recursive: true })
+      await writeFile(join(workspace, '.omp', 'rules', 'already.md'),
+        '---\ndescription: already here\n---\n\nBody\n', 'utf8')
+      const { ctx, host } = await boot({ enabled: true, userRulesDir: join(workspace, 'no-user') }, workspace, 'create-omp')
+
+      await ctx.tools.execute(executionInput(host.agent, {
+        action: 'create', name: created, frontmatter: 'description: d', body: 'b',
+      }))
+
+      expect(await readFile(join(workspace, '.omp', 'rules', `${created}.md`), 'utf8')).toContain('description: d')
       await rm(dirname(workspace), { recursive: true, force: true })
     })
 
@@ -190,8 +210,8 @@ describe('rule tool on the live registry', () => {
       // never reported — one that failed to parse, say — would otherwise be
       // silently overwritten by a rule the model invented.
       const workspace = join(await mkdtemp(join(tmpdir(), 'dsh-create-')), 'project')
-      await mkdir(join(workspace, '.omp', 'rules'), { recursive: true })
-      const file = join(workspace, '.omp', 'rules', `${created}.md`)
+      const file = join(workspace, '.dsh', 'rules', `${created}.md`)
+      await mkdir(dirname(file), { recursive: true })
       await writeFile(file, 'hand written, do not lose me\n', 'utf8')
       const { ctx, host } = await boot({ enabled: true, userRulesDir: join(workspace, 'no-user') }, workspace, 'create-2')
 

@@ -30,7 +30,9 @@ import { dedupeDuplicateBodies, renderAlwaysApply, renderRulebook } from './prom
 import { RuleSession, toolPaths, toolSnapshot } from './session.ts'
 import { RuleSessionStore } from './sessions.ts'
 import type { Rule } from './rule.ts'
-import { createRuleTool, ruleFilePath, type RuleLookup, type RuleToggle } from './tool.ts'
+import { createRuleTool, ruleFilePath, type RuleLookup, type RuleToggle, type RuleWriteResult } from './tool.ts'
+import { ensureRuleDir, resolveRuleDir, ruleDirPair, type RuleScope } from './rulesdir.ts'
+import { migrateRules, type MigrationResult } from './migrate.ts'
 import { TtsrManager, type TtsrSettings } from './ttsr.ts'
 
 /** Prompt order band for domain rules, above the tool-guidance band. */
@@ -156,48 +158,77 @@ export function apply(ctx: Context, config: Config): void {
    */
   const createRule = async (
     exec: ToolRunContext,
+    scope: RuleScope,
     name: string,
     frontmatter: string,
     body: string,
-  ): Promise<ToggleResult> => {
-  // The session's own workspace, not the audit's: the model is writing for the
-  // conversation it is in, and the audit panel may be pointed somewhere else.
-  const cwd = exec.agent?.session?.header?.cwd
-  if (typeof cwd !== 'string' || cwd === '') {
-    return { ok: false, guidance: 'this session has no workspace, so there is nowhere to write the rule.', disabled: [] }
-  }
-  const dir = join(cwd, '.omp', 'rules')
-  const path = ruleFilePath(dir, name)
-  try {
-    // `wx` fails rather than truncating, and the directory may not exist yet:
-    // a workspace with no rules has no `.omp/rules/` at all.
-    await mkdir(dir, { recursive: true })
-    // Exclusive create: a file that is already there is never truncated, even
-    // by a rule whose name discovery never reported.
-    const handle = await open(path, 'wx')
+  ): Promise<RuleWriteResult> => {
+    // The session's own workspace, not the audit's: the model is writing for
+    // the conversation it is in, and the audit panel may be pointed elsewhere.
+    const cwd = exec.agent?.session?.header?.cwd
+    if (typeof cwd !== 'string' || cwd === '') {
+      return { ok: false, guidance: 'this session has no workspace, so there is nowhere to write the rule.', disabled: [] }
+    }
+    const target = await resolveRuleDir(scope, cwd, resolved.userRulesDir)
+    await ensureRuleDir(target.path)
+    const path = ruleFilePath(target.path, name)
     try {
-      await handle.writeFile(`---\n${frontmatter.trim()}\n---\n\n${body.trim()}\n`, 'utf8')
-    } finally {
-      await handle.close()
+      // `wx` fails rather than truncating, and the directory may not exist yet:
+      // a workspace with no rules has none of these paths.
+      const handle = await open(path, 'wx')
+      try {
+        await handle.writeFile(`---\n${frontmatter.trim()}\n---\n\n${body.trim()}\n`, 'utf8')
+      } finally {
+        await handle.close()
+      }
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code
+      if (code === 'EEXIST') {
+        return { ok: false, guidance: `${path} already exists. Edit that file rather than replacing it.`, disabled: [] }
+      }
+      return {
+        ok: false,
+        guidance: `could not write ${path}: ${error instanceof Error ? error.message : String(error)}`,
+        disabled: [],
+      }
     }
-  } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code
-    if (code === 'EEXIST') {
-      return { ok: false, guidance: `${path} already exists. Edit that file rather than replacing it.`, disabled: [] }
-    }
-    return {
-      ok: false,
-      guidance: `could not write ${path}: ${error instanceof Error ? error.message : String(error)}`,
-      disabled: [],
-    }
+    // The snapshot this turn was built from does not contain the new rule, so
+    // saying it applies now would be a lie. Rebuild before the next step runs.
+    sessions.rebuildAll()
+    return { ok: true, disabled: [...liveTtsr(config).disabledRules], path }
   }
-  // The snapshot this turn was built from does not contain the new rule, so
-  // saying it applies now would be a lie. Rebuild before the next step runs.
-  sessions.rebuildAll()
-  return { ok: true, disabled: [...liveTtsr(config).disabledRules] }
-}
 
-/**
+  /**
+  /**
+   * Move rule files between the two conventions for one scope.
+   *
+   * Both sides come from the directory pair, so a move is between two
+   * directories discovery already reads: the rule keeps its name, its body and
+   * what it does, and only its location changes.
+   */
+  const migrateRulesFor = async (
+    exec: ToolRunContext,
+    scope: RuleScope,
+    to: 'omp' | 'dsh',
+  ): Promise<MigrationResult> => {
+    // The session's workspace, exactly as `createRule` resolves it. Reading
+    // `auditCwd` instead would move whichever project's rules the Settings panel
+    // happened to be left pointing at — which is not the project the user asked
+    // about, and is nothing at all for a reader who never opened the panel.
+    const cwd = exec.agent?.session?.header?.cwd
+    if (typeof cwd !== 'string' || cwd === '') {
+      return { from: '', to: '', moved: [], empty: true }
+    }
+    const pair = await ruleDirPair(scope, cwd, resolved.userRulesDir)
+    const plan = to === 'omp'
+      ? { from: pair.dsh.path, to: pair.omp.path, fromConvention: 'dsh' as const, toConvention: 'omp' as const }
+      : { from: pair.omp.path, to: pair.dsh.path, fromConvention: 'omp' as const, toConvention: 'dsh' as const }
+    const result = await migrateRules(plan)
+    sessions.rebuildAll()
+    return result
+  }
+
+  /**
  * Registered workspaces, read through the host's own registry.
    *
    * `ctx.get` rather than property access: the workspace service is not in this
@@ -371,7 +402,10 @@ export function apply(ctx: Context, config: Config): void {
       tool => ctx.tools.register(tool),
       exec => lookup(sessions, exec.agent),
       () => toggle(config, persistDisabled),
-      exec => ({ create: (name, frontmatter, body) => createRule(exec, name, frontmatter, body) }),
+      exec => ({
+        create: (scope, name, frontmatter, body) => createRule(exec, scope, name, frontmatter, body),
+        migrate: (scope, to) => migrateRulesFor(exec, scope, to),
+      }),
     )
 
     // Warm path only. Every other surface below falls back to building on
