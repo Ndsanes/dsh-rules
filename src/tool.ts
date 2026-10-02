@@ -19,7 +19,7 @@ import { join } from 'node:path'
 import type { Rule } from './rule.ts'
 import type { ToggleResult } from './audit.ts'
 import { parseFrontmatter } from './frontmatter.ts'
-import type { RuleScope } from './rulesdir.ts'
+import type { RuleLocation, RuleScope } from './rulesdir.ts'
 import { renderMigration, type MigrationResult } from './migrate.ts'
 
 /** What the tool needs in order to write a new rule file. */
@@ -34,12 +34,20 @@ export interface RuleWriter {
    */
   create: (scope: RuleScope, name: string, frontmatter: string, body: string) => Promise<RuleWriteResult>
   /**
-   * Move rule files between the two conventions for one scope.
-   *
-   * Same reasoning as `create`: it changes files on the user's disk, so it is a
-   * separate surface the model only reaches when the user asks for the move.
-   */
-  migrate: (scope: RuleScope, to: 'omp' | 'dsh') => Promise<MigrationResult>
+ * Move rule files between two directories.
+ *
+ * Both axes are independent, because the two things a user might want to change
+ * are different: which convention the rules follow (`.omp` or dsh's), and which
+ * scope they belong to (this workspace, or every workspace). Project → global is
+ * the second axis alone, and a convention change within one scope is the first.
+ *
+ * Same reasoning as `create`: it changes files on the user's disk, so it is a
+ * separate surface the model only reaches when the user asks for the move.
+ */
+  migrate: (
+    from: { scope: RuleScope; convention: 'omp' | 'dsh' },
+    to: { scope: RuleScope; convention: 'omp' | 'dsh' },
+  ) => Promise<MigrationResult>
 }
 
 /** A write outcome that also reports where the file landed. */
@@ -140,8 +148,10 @@ Parameters:
 - frontmatter: the YAML frontmatter block, without the --- fences. For create.
 - body: the rule text the model should read. For create.
 - scope: project (default) or global. Project rules travel with the workspace;
-  global ones apply to every workspace. For create and migrate.
-- to: omp or dsh. Only for migrate.`
+  global ones apply to every workspace. For create, and the source of migrate.
+- fromConvention: omp (default) or dsh. Only for migrate.
+- toScope: project or global, defaulting to the source scope. Only for migrate.
+- toConvention: omp or dsh. Only for migrate.`
 
 /** One addressable snapshot for a single agent. */
 export interface RuleSnapshot {
@@ -257,7 +267,15 @@ export function createRuleTool(
         type: 'string',
         description: 'project (default) or global. Only for create and migrate.',
       },
-      to: {
+      fromConvention: {
+        type: 'string',
+        description: 'Which convention the rules are under now: omp (default) or dsh. Only for migrate.',
+      },
+      toScope: {
+        type: 'string',
+        description: 'Destination scope: project or global. Defaults to the source scope. Only for migrate.',
+      },
+      toConvention: {
         type: 'string',
         description: 'Which convention to move rules onto: omp or dsh. Only for migrate.',
       },
@@ -308,9 +326,19 @@ export function createRuleTool(
       }
 
       if (action === 'migrate') {
-        const scope: RuleScope = args.scope === 'global' ? 'global' : 'project'
-        const to = args.to === 'omp' ? 'omp' : 'dsh'
-        return renderMigration(await write(exec).migrate(scope, to))
+        // Two independent axes. `scope` and `fromConvention` name the source,
+        // `toScope` and `toConvention` the destination; `toScope` defaults to
+        // the source's, so a convention change within one scope needs one
+        // argument and a scope change needs two.
+        const from: RuleLocation = {
+          scope: args.scope === 'global' ? 'global' : 'project',
+          convention: args.fromConvention === 'dsh' ? 'dsh' : 'omp',
+        }
+        const to: RuleLocation = {
+          scope: args.toScope === 'global' ? 'global' : from.scope,
+          convention: args.toConvention === 'omp' ? 'omp' : 'dsh',
+        }
+        return renderMigration(await write(exec).migrate(from, to))
       }
 
       if (action === 'enable' || action === 'disable') {

@@ -31,7 +31,7 @@ import { RuleSession, toolPaths, toolSnapshot } from './session.ts'
 import { RuleSessionStore } from './sessions.ts'
 import type { Rule } from './rule.ts'
 import { createRuleTool, ruleFilePath, type RuleLookup, type RuleToggle, type RuleWriteResult } from './tool.ts'
-import { ensureRuleDir, resolveRuleDir, ruleDirPair, type RuleScope } from './rulesdir.ts'
+import { ensureRuleDir, resolveRuleDir, ruleDir, type RuleLocation, type RuleScope } from './rulesdir.ts'
 import { migrateRules, type MigrationResult } from './migrate.ts'
 import { TtsrManager, type TtsrSettings } from './ttsr.ts'
 
@@ -195,6 +195,7 @@ export function apply(ctx: Context, config: Config): void {
     // The snapshot this turn was built from does not contain the new rule, so
     // saying it applies now would be a lie. Rebuild before the next step runs.
     sessions.rebuildAll()
+    republishAudit()
     return { ok: true, disabled: [...liveTtsr(config).disabledRules], path }
   }
 
@@ -208,8 +209,8 @@ export function apply(ctx: Context, config: Config): void {
    */
   const migrateRulesFor = async (
     exec: ToolRunContext,
-    scope: RuleScope,
-    to: 'omp' | 'dsh',
+    from: RuleLocation,
+    to: RuleLocation,
   ): Promise<MigrationResult> => {
     // The session's workspace, exactly as `createRule` resolves it. Reading
     // `auditCwd` instead would move whichever project's rules the Settings panel
@@ -219,12 +220,17 @@ export function apply(ctx: Context, config: Config): void {
     if (typeof cwd !== 'string' || cwd === '') {
       return { from: '', to: '', moved: [], empty: true }
     }
-    const pair = await ruleDirPair(scope, cwd, resolved.userRulesDir)
-    const plan = to === 'omp'
-      ? { from: pair.dsh.path, to: pair.omp.path, fromConvention: 'dsh' as const, toConvention: 'omp' as const }
-      : { from: pair.omp.path, to: pair.dsh.path, fromConvention: 'omp' as const, toConvention: 'dsh' as const }
-    const result = await migrateRules(plan)
+    const result = await migrateRules({
+      from: ruleDir(from, cwd, resolved.userRulesDir),
+      to: ruleDir(to, cwd, resolved.userRulesDir),
+      fromConvention: from.convention,
+      toConvention: to.convention,
+    })
     sessions.rebuildAll()
+    // The panel was built from the directories before the move, so its rows
+    // still name the old paths — and after a scope change the rules it listed
+    // are no longer this workspace's at all.
+    republishAudit()
     return result
   }
 
@@ -404,7 +410,7 @@ export function apply(ctx: Context, config: Config): void {
       () => toggle(config, persistDisabled),
       exec => ({
         create: (scope, name, frontmatter, body) => createRule(exec, scope, name, frontmatter, body),
-        migrate: (scope, to) => migrateRulesFor(exec, scope, to),
+        migrate: (from, to) => migrateRulesFor(exec, from, to),
       }),
     )
 

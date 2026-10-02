@@ -57,7 +57,7 @@ function currentLookup(): RuleLookup {
 /** Rule files the stub writer records, so a create can be asserted on. */
 let created: { scope: string; name: string; frontmatter: string; body: string }[] = []
 let createGuidance = ''
-let migrated: { scope: string; to: string }[] = []
+let migrated: { from: { scope: string; convention: string }; to: { scope: string; convention: string } }[] = []
 
 function currentWriter(): RuleWriter {
   return {
@@ -66,8 +66,8 @@ function currentWriter(): RuleWriter {
       created.push({ scope, name, frontmatter, body })
       return { ok: true, disabled: [], path: `/tmp/${scope}/${name}.md` }
     },
-    migrate: async (scope, to) => {
-      migrated.push({ scope, to })
+    migrate: async (from, to) => {
+      migrated.push({ from, to })
       return { from: '/from', to: '/to', moved: [], empty: true }
     },
   }
@@ -125,12 +125,37 @@ describe('createRuleTool', () => {
       expect(out).toContain('/tmp/project/x.md')
     })
 
-    it('migrates rules onto the requested convention', async () => {
+    it('moves project rules onto the dsh convention', async () => {
       active = []
       const { tool } = captureTool()
-      const out = await run(tool, { action: 'migrate', scope: 'project', to: 'dsh' })
-      expect(migrated).toEqual([{ scope: 'project', to: 'dsh' }])
+      const out = await run(tool, { action: 'migrate', scope: 'project', toConvention: 'dsh' })
+      expect(migrated).toEqual([{
+        from: { scope: 'project', convention: 'omp' },
+        to: { scope: 'project', convention: 'dsh' },
+      }])
       expect(out).toContain('No rule files')
+    })
+
+    it('moves project rules to the global scope, keeping the convention', async () => {
+      // The two axes are independent: a user asking to "make these rules apply
+      // everywhere" changes scope and nothing else. Defaulting the convention
+      // from the source is what makes that a one-argument move.
+      active = []
+      const { tool } = captureTool()
+      await run(tool, { action: 'migrate', scope: 'project', toScope: 'global' })
+      expect(migrated[0]?.to).toEqual({ scope: 'global', convention: 'dsh' })
+    })
+
+    it('moves rules and changes convention at the same time', async () => {
+      active = []
+      const { tool } = captureTool()
+      await run(tool, {
+        action: 'migrate', scope: 'project', fromConvention: 'omp', toScope: 'global', toConvention: 'omp',
+      })
+      expect(migrated[0]).toEqual({
+        from: { scope: 'project', convention: 'omp' },
+        to: { scope: 'global', convention: 'omp' },
+      })
     })
 
     it('writes the file and tells the model to have it reviewed', async () => {

@@ -186,15 +186,21 @@ export async function loadNative(options: DiscoveryOptions): Promise<ProviderRes
     join(options.cwd, '.dsh', 'rules'),
     { ...source, scope: scopeOf(options.cwd) },
     warnings))
-  rules.push(...await rulesFromDir(
-    join(dshRulesHome(), 'rules'),
-    { ...source, path: join(dshRulesHome(), 'rules'), scope: '~' },
-    warnings))
 
   const userDir = options.userRulesDir
   rules.push(...await rulesFromDir(
     join(userDir, 'rules'),
     { ...source, path: join(userDir, 'rules'), scope: '~' },
+    warnings))
+  // The dsh global directory goes after OMP's, not before: the writer resolves
+  // a scope to whichever convention already holds rules there and prefers OMP,
+  // so reading dsh first would let it claim a name that a global rule written
+  // a moment ago had just resolved to the OMP directory. A name present in both
+  // has to resolve the same way for the reader and the writer, or a rule would
+  // be written into one directory and listed under the other.
+  rules.push(...await rulesFromDir(
+    join(dshRulesHome(), 'rules'),
+    { ...source, path: join(dshRulesHome(), 'rules'), scope: '~' },
     warnings))
 
   const sticky = async (path: string, from: RuleSource = source): Promise<void> => {

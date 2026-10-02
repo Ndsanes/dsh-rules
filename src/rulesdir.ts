@@ -22,8 +22,23 @@ import { join } from 'node:path'
 /** Which set of rules a write belongs to. */
 export type RuleScope = 'project' | 'global'
 
-/** One convention's directories for one scope. */
+/** Which convention owns a directory, and which scope it belongs to. */
 export interface RuleLocation {
+  /** Project rules travel with the workspace; global ones do not. */
+  readonly scope: RuleScope
+  /** Which convention owns it, for the panel to show. */
+  readonly convention: 'omp' | 'dsh'
+}
+
+/** The absolute directory one scope-and-convention pair resolves to. */
+export function ruleDir(location: RuleLocation, cwd: string, userRulesDir: string): string {
+  return location.convention === 'omp'
+    ? ompDir(location.scope, cwd, userRulesDir)
+    : dshDir(location.scope, cwd)
+}
+
+/** A directory a write resolved to, with the convention that chose it. */
+export interface ResolvedRuleDir {
   /** Absolute directory rule files are read from and written to. */
   readonly path: string
   /** Which convention owns it, for the panel to show. */
@@ -76,7 +91,7 @@ export async function resolveRuleDir(
   scope: RuleScope,
   cwd: string,
   userRulesDir: string,
-): Promise<RuleLocation> {
+): Promise<ResolvedRuleDir> {
   const omp = ompDir(scope, cwd, userRulesDir)
   // Presence of the directory alone is not the test — an `.omp` left behind by
   // an unrelated tool would otherwise capture every rule written into a dsh
@@ -96,7 +111,7 @@ export async function ruleDirPair(
   scope: RuleScope,
   cwd: string,
   userRulesDir: string,
-): Promise<{ omp: RuleLocation; dsh: RuleLocation }> {
+): Promise<{ omp: ResolvedRuleDir; dsh: ResolvedRuleDir }> {
   return {
     omp: { path: ompDir(scope, cwd, userRulesDir), convention: 'omp' },
     dsh: { path: dshDir(scope, cwd), convention: 'dsh' },

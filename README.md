@@ -258,9 +258,19 @@ wherever it sits.
 
 ### Migrating between the two
 
-`rule` with `action: "migrate"` moves every rule in one scope's directory onto
-the convention named by `to` — so project → global and global → project are both
-expressible, and `.omp` → dsh and dsh → `.omp` in either direction.
+`rule` with `action: "migrate"` moves every rule from one directory to another.
+Two axes are independent, so all four moves are expressible:
+
+| Move | Arguments |
+|---|---|
+| `.omp` → dsh, same scope | `toConvention: "dsh"` |
+| dsh → `.omp`, same scope | `fromConvention: "dsh"`, `toConvention: "omp"` |
+| project → global | `toScope: "global"` |
+| global → project | `scope: "global"` |
+
+`toScope` defaults to the source's scope, so a move that changes only one axis
+takes one argument. Both can change at once — project OMP rules onto the global
+dsh directory, say — which is a real arrangement and works like any other.
 
 A migration is a change of directory, not of meaning: both sides are read by
 discovery, so the name, the body and what the rule does are untouched. Three

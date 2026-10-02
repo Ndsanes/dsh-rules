@@ -5,6 +5,10 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import { resolveRuleDir, ruleDirPair } from '../src/rulesdir.ts'
 import { migrateRules, renderMigration } from '../src/migrate.ts'
+import { loadCapability } from '../src/capability.ts'
+import { loadNative } from '../src/discovery.ts'
+
+const emptyDir = (): string => join(root, 'no-rules-here')
 
 /**
  * Rules go to whichever convention the scope already uses.
@@ -86,6 +90,34 @@ describe('resolveRuleDir', () => {
     // Discovery calls this on every pass; a resolver that created the directory
     // would give the dsh path a rule set on a workspace that never had one.
     await expect(readdir(join(cwd, '.dsh')).then(() => true, () => false)).resolves.toBe(false)
+  })
+})
+
+describe('discovery order', () => {
+  it('resolves a name present in both global directories the way the writer would', async () => {
+    // The writer prefers OMP for a scope that already holds rules there, so the
+    // reader has to too. Reading dsh first made the two disagree: a global rule
+    // was written into `~/.omp/agent/rules` and then listed from
+    // `$DSH_HOME/rules` under the same name — one rule file, reported twice,
+    // with the one that actually applies being the one the panel called shadowed.
+    const ompGlobal = join(userRulesDir, 'rules')
+    const dshGlobal = join(home, '.dsh', 'rules')
+    await writeRule(ompGlobal, 'shared', 'the omp one\n')
+    await writeRule(dshGlobal, 'shared', 'the dsh one\n')
+
+    // Through the capability merge, which is where a name actually resolves to
+    // one rule: the first provider to claim it wins and the rest are shadowed.
+    const merged = loadCapability([await loadNative({
+      cwd: emptyDir(),
+      userRulesDir,
+      pluginRoots: [],
+      copilotInstructionDirs: [],
+    })])
+    const winners = merged.items.filter(rule => rule.name === 'shared')
+    expect(winners).toHaveLength(1)
+    expect(winners[0]?.path).toBe(join(ompGlobal, 'shared.md'))
+    // And the loser is reported as shadowed rather than silently disappearing.
+    expect(merged.all.filter(rule => rule.name === 'shared')).toHaveLength(2)
   })
 })
 
