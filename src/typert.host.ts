@@ -19,9 +19,24 @@ interface StrictCodec {
   create: () => z.ZodType
 }
 
+/**
+ * This package's npm name.
+ *
+ * The Typert manifest names the package it describes, and the loader validates
+ * that at boot, so it has to be the scoped name. It also prefixes the
+ * `typeSymbol` and invocation `id` wire identifiers, which the browser half in
+ * `src/client/index.js` builds from the same string — a host that had both
+ * this package and the unrelated unscoped `dsh-rules` on npm installed would
+ * otherwise have two different services claiming one type symbol.
+ *
+ * Declared ahead of the codec helpers: they read it while building this
+ * module's top-level constants, which run above the manifest object.
+ */
+const PACKAGE_NAME = '@ndsanes/dsh-rules'
+
 const strictCodec = (name: string, schema: z.ZodType): StrictCodec => ({
   mode: 'strict',
-  typeSymbol: `dsh-rules#${name}`,
+  typeSymbol: `${PACKAGE_NAME}#${name}`,
   schema,
   create: () => schema,
 })
@@ -70,7 +85,7 @@ const toggleCodec = strictCodec('ToggleResult', toggleSchema)
 const ruleNamesCodec = strictCodec('RuleNames', z.array(z.string()).max(64))
 
 export const TYPERT = {
-  package: 'dsh-rules',
+  package: PACKAGE_NAME,
   face: 'host',
   schemas: [],
   model: {
@@ -100,7 +115,7 @@ export const TYPERT = {
   },
   invocations: [
     {
-      id: 'dsh-rules#dshRules/audit',
+      id: `${PACKAGE_NAME}#dshRules/audit`,
       service: 'dshRules',
       namespace: 'dshRules',
       method: 'audit',
@@ -109,7 +124,7 @@ export const TYPERT = {
       result: reportCodec,
     },
     {
-      id: 'dsh-rules#dshRules/setDisabled',
+      id: `${PACKAGE_NAME}#dshRules/setDisabled`,
       service: 'dshRules',
       namespace: 'dshRules',
       method: 'setDisabled',
@@ -120,7 +135,7 @@ export const TYPERT = {
       result: toggleCodec,
     },
     {
-      id: 'dsh-rules#dshRules/readRule',
+      id: `${PACKAGE_NAME}#dshRules/readRule`,
       service: 'dshRules',
       namespace: 'dshRules',
       method: 'readRule',
@@ -135,7 +150,7 @@ export const TYPERT = {
       })),
     },
     {
-      id: 'dsh-rules#dshRules/writeRule',
+      id: `${PACKAGE_NAME}#dshRules/writeRule`,
       service: 'dshRules',
       namespace: 'dshRules',
       method: 'writeRule',
@@ -147,7 +162,7 @@ export const TYPERT = {
       result: toggleCodec,
     },
     {
-      id: 'dsh-rules#dshRules/listWorkspaces',
+      id: `${PACKAGE_NAME}#dshRules/listWorkspaces`,
       service: 'dshRules',
       namespace: 'dshRules',
       method: 'listWorkspaces',
@@ -156,7 +171,7 @@ export const TYPERT = {
       result: strictCodec('WorkspaceList', z.array(workspaceSchema)),
     },
     {
-      id: 'dsh-rules#dshRules/openWorkspace',
+      id: `${PACKAGE_NAME}#dshRules/openWorkspace`,
       service: 'dshRules',
       namespace: 'dshRules',
       method: 'openWorkspace',
@@ -167,7 +182,7 @@ export const TYPERT = {
       result: toggleCodec,
     },
     {
-      id: 'dsh-rules#dshRules/closeWorkspace',
+      id: `${PACKAGE_NAME}#dshRules/closeWorkspace`,
       service: 'dshRules',
       namespace: 'dshRules',
       method: 'closeWorkspace',

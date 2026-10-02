@@ -9,8 +9,15 @@
  * @module dsh-rules
  */
 
-/** Cordis plugin name; keep this stable after publishing. */
-export const name = 'dsh-rules'
+/**
+ * Cordis plugin name.
+ *
+ * The loader resolves a bundle row to the module it named, so this is the
+ * package name and must match `package.json` and the `name` in
+ * `cordis.patch.yml`. It is published, so changing it later breaks every
+ * existing install's patch layer.
+ */
+export const name = '@ndsanes/dsh-rules'
 
 /** Services that must exist before the plugin is applied. */
 export const inject = ['agents', 'tools', 'systemPrompt']

@@ -17,6 +17,19 @@ window.__ModuleLoader__.load({
     var exports = module.exports
     Object.defineProperty(exports, Symbol.toStringTag, { value: 'Module' })
 
+    /**
+     * Identity of this plugin, in the two forms the host uses.
+     *
+     * The Plugins page mounts this section by matching the *package* name, so
+     * it has to be the scoped npm name — the bare `dsh-rules` is a different
+     * package on the registry, and matching it would also mean mounting
+     * alongside that one if both were ever installed. The bare name is kept
+     * separately because it is also this plugin's local row id: that one is
+     * deployment-local and is what `cordis.patch.yml` inserts.
+     */
+    const PACKAGE_NAME = '@ndsanes/dsh-rules'
+    const ROW_ID = 'dsh-rules'
+
     const React = require('react')
     const { useCallback, useEffect, useMemo, useState, useSyncExternalStore } = React
     const { translator, sourceLabel: sourceLabelFor, REASON_KEY } = require('./i18n.js')
@@ -33,10 +46,10 @@ window.__ModuleLoader__.load({
      * wait forever for a service nobody provides.
      */
     const RULES_REMOTE = {
-      package: 'dsh-rules',
+      package: PACKAGE_NAME,
       descriptors: [
         {
-          id: 'dsh-rules#dshRules/audit',
+          id: `${PACKAGE_NAME}#dshRules/audit`,
           service: 'dshRules',
           namespace: 'dshRules',
           method: 'audit',
@@ -45,7 +58,7 @@ window.__ModuleLoader__.load({
           result: CODECS.auditReport(),
         },
         {
-          id: 'dsh-rules#dshRules/setDisabled',
+          id: `${PACKAGE_NAME}#dshRules/setDisabled`,
           service: 'dshRules',
           namespace: 'dshRules',
           method: 'setDisabled',
@@ -54,7 +67,7 @@ window.__ModuleLoader__.load({
           result: CODECS.toggleResult(),
         },
         {
-          id: 'dsh-rules#dshRules/readRule',
+          id: `${PACKAGE_NAME}#dshRules/readRule`,
           service: 'dshRules',
           namespace: 'dshRules',
           method: 'readRule',
@@ -63,7 +76,7 @@ window.__ModuleLoader__.load({
           result: CODECS.readRuleResult(),
         },
         {
-          id: 'dsh-rules#dshRules/writeRule',
+          id: `${PACKAGE_NAME}#dshRules/writeRule`,
           service: 'dshRules',
           namespace: 'dshRules',
           method: 'writeRule',
@@ -75,7 +88,7 @@ window.__ModuleLoader__.load({
           result: CODECS.toggleResult(),
         },
         {
-          id: 'dsh-rules#dshRules/listWorkspaces',
+          id: `${PACKAGE_NAME}#dshRules/listWorkspaces`,
           service: 'dshRules',
           namespace: 'dshRules',
           method: 'listWorkspaces',
@@ -84,7 +97,7 @@ window.__ModuleLoader__.load({
           result: CODECS.workspaceList(),
         },
         {
-          id: 'dsh-rules#dshRules/openWorkspace',
+          id: `${PACKAGE_NAME}#dshRules/openWorkspace`,
           service: 'dshRules',
           namespace: 'dshRules',
           method: 'openWorkspace',
@@ -93,7 +106,7 @@ window.__ModuleLoader__.load({
           result: CODECS.toggleResult(),
         },
         {
-          id: 'dsh-rules#dshRules/closeWorkspace',
+          id: `${PACKAGE_NAME}#dshRules/closeWorkspace`,
           service: 'dshRules',
           namespace: 'dshRules',
           method: 'closeWorkspace',
@@ -328,11 +341,11 @@ window.__ModuleLoader__.load({
      */
     function ownsSubject(subject) {
       if (subject === undefined || subject === null) return false
-      if (subject.kind === 'bundle') return subject.pkg?.name === 'dsh-rules'
+      if (subject.kind === 'bundle') return subject.pkg?.name === PACKAGE_NAME
       if (subject.kind === 'row') {
-        return subject.row?.moduleName === 'dsh-rules' || subject.row?.rowId === 'dsh-rules'
+        return subject.row?.moduleName === PACKAGE_NAME || subject.row?.rowId === ROW_ID
       }
-      return subject.id === 'dsh-rules'
+      return subject.id === ROW_ID || subject.id === PACKAGE_NAME
     }
 
     const styles = {
@@ -1328,7 +1341,9 @@ window.__ModuleLoader__.load({
             t('sourcesNote'))))
     }
 
-    exports.name = 'dsh-rules'
+    // The host keys the client plugin by its package name, so this is the scoped
+    // name rather than the row id the loader envelope above uses.
+    exports.name = PACKAGE_NAME
     exports.inject = ['slots', 'remote', 'locale']
 
     /**

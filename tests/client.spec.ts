@@ -8,6 +8,24 @@ import { FIELD_SPECS } from '../src/client/frontmatter.js'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 
+import manifest from '../package.json' with { type: 'json' }
+import { TYPERT } from '../src/typert.host.ts'
+
+/**
+ * Identity the whole package has to agree on.
+ *
+ * `package.json` is the source of truth; `src/index.ts`, `src/typert.host.ts`
+ * and the browser half each carry their own copy of the name, because they are
+ * three separate modules loaded by three separate resolvers. Deriving the
+ * expectations here means renaming the package is a one-line change that the
+ * suite then verifies everywhere, instead of four literals to remember.
+ */
+const PACKAGE_NAME = manifest.name
+/** The row id `cordis.patch.yml` inserts; deployment-local, not the package name. */
+const ROW_ID = 'dsh-rules'
+/** Invocation ids the host face publishes for the browser half to match. */
+const HOST_INVOCATION_IDS = TYPERT.invocations.map(invocation => invocation.id)
+
 /** One registration the client half made. */
 interface Registration {
   descriptor: { name: string; id?: string; key?: string }
@@ -171,23 +189,51 @@ function renderToggles(ctx: unknown, report?: Record<string, unknown>): string {
 }
 
 /** The subject the Plugins page passes for this plugin's own row. */
-const MY_ROW = { kind: 'row', pkg: { name: 'dsh-rules' }, row: { rowId: 'dsh-rules', moduleName: 'dsh-rules', enabled: true } }
+const MY_ROW = { kind: 'row', pkg: { name: PACKAGE_NAME }, row: { rowId: ROW_ID, moduleName: PACKAGE_NAME, enabled: true } }
+
+/** A Remote contribution as the client half hands it to `remote.$mount`. */
+interface RemoteContribution {
+  package: string
+  descriptors: readonly { namespace?: string; id: string }[]
+}
+
+/**
+ * Narrow whatever `remote.$mount` was handed.
+ *
+ * The stub receives `unknown` because that is all the fake context declares, so
+ * the shape is checked at runtime here rather than asserted — an unchecked cast
+ * would make a malformed contribution read as a valid one and turn the id
+ * comparison below into a comparison against `undefined`.
+ */
+function asRemoteContribution(value: unknown): RemoteContribution | undefined {
+  if (typeof value !== 'object' || value === null) return undefined
+  if (!('package' in value) || typeof value.package !== 'string') return undefined
+  if (!('descriptors' in value) || !Array.isArray(value.descriptors)) return undefined
+  return { package: value.package, descriptors: value.descriptors as { id: string }[] }
+}
 
 let mountedNamespaces: string[] = []
+/** The last Remote contribution the client half asked the host to mount. */
+let mountedRemote: RemoteContribution | undefined
 
 beforeAll(async () => {
   half = loadClientBundle()
   registrations = []
   remoteCalls = []
   mountedNamespaces = []
+  mountedRemote = undefined
 
   const context = buildContext()
   const original = context.remote.$mount
   context.remote.$mount = contribution => {
-    const names = ((contribution as { descriptors?: { namespace?: string }[] }).descriptors ?? [])
-      .map(entry => entry.namespace)
-      .filter((name): name is string => name !== undefined)
-    mountedNamespaces = [...mountedNamespaces, ...names]
+    const remote = asRemoteContribution(contribution)
+    mountedNamespaces = [
+      ...mountedNamespaces,
+      ...(remote?.descriptors ?? [])
+        .map(entry => entry.namespace)
+        .filter((name): name is string => name !== undefined),
+    ]
+    mountedRemote = remote
     return original(contribution)
   }
   await half.apply(context)
@@ -199,9 +245,27 @@ describe('client half', () => {
   })
 
   it('registers itself under the package name and asks for the remote service', () => {
-    expect(half.name).toBe('dsh-rules')
+    // Read from package.json rather than repeating the literal: the loader
+    // resolves a bundle row to the module it named, so the client half's name,
+    // the host half's export, and the manifest all have to track the published
+    // package name. Hard-coding it here made this assertion the one place that
+    // had to be edited by hand — and it was left behind when the package was
+    // scoped, which silently stops the Plugins page from mounting.
+    expect(half.name).toBe(PACKAGE_NAME)
     expect(half.inject).toContain('slots')
     expect(half.inject).toContain('remote')
+  })
+
+  it('keys its Remote descriptors on the same package name the host face does', () => {
+    // The two halves never talk to each other directly: the host publishes
+    // invocation ids and the browser half matches them, so a prefix that drifts
+    // on one side only fails as a namespace that never mounts — no error, just
+    // an absent page section.
+    expect(mountedRemote).toBeDefined()
+    if (mountedRemote === undefined) return
+    expect(mountedRemote.package).toBe(PACKAGE_NAME)
+    expect(mountedRemote.descriptors.map(descriptor => descriptor.id).slice().sort())
+      .toEqual(HOST_INVOCATION_IDS.slice().sort())
   })
 
   it('mounts its own Remote namespace instead of waiting for one', () => {
