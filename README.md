@@ -224,9 +224,9 @@ re-readable after it fires.
 The tool also writes. When the user states a constraint that will still hold
 next week, the system prompt tells the model to write it down rather than only
 obey it once: call `rule` with `action: "create"`, a name, a `frontmatter`
-block and a `body`, and the file lands in the session workspace's
-`.omp/rules/`. It joins the audit like any other project rule, so it can be
-edited or deleted from the panel.
+block and a `body`, and the file lands in whichever directory that scope
+resolves to — see below. It joins the audit like any other project rule, so it
+can be edited or deleted from the panel.
 
 Three things are refused rather than written:
 
