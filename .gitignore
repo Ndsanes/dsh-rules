@@ -2,15 +2,13 @@ node_modules/
 lib/
 *.tsbuildinfo
 .DS_Store
-
-# Generated from src/builtin-rules/*.md by scripts/embed-builtin-rules.mts
 src/generated/
 
-# Local notes for submitting to the registry; they live in the marketplace
-# repo, not here.
-market-PR.md
-market-entry.yml
+# Never commit: the marketplace shows these, and they carry the contents of
+# this machine's real rule set — workspace names, rule names, and their bodies.
+assets/
+screenshots.json
 
-# Transcripts recorded from real runs. They quote prompts produced by tooling
-# that is not open source, so they stay local.
-evidence/
+# Registry submission material — a PR to awesome-dsh-plugin is a separate repo.
+market-entry.yml
+market-PR.md
