@@ -1,13 +1,13 @@
 # dsh-rules
 
+[简体中文](README.zh-CN.md)
+
 OMP rules for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness).
 
 Discovers rule files from every convention OMP supports, injects the
 always-apply and rulebook layers into the system prompt, lets the model load a
 rule body on demand, and enforces **time-traveling stream rules** that interrupt
 violating model output mid-turn.
-
-Everything here is a Cordis plugin. The dsh kernel is not modified.
 
 ## Install
 
@@ -352,20 +352,6 @@ scripts/verify-interrupt.sh /path/to/isolated/dsh-home /path/to/fixture
 kit, points them at a scripted adapter that violates a rule on its first reply,
 and asserts the abort, the `<system-interrupt>` retry, the `<system-reminder>`
 path for `interruptMode: never`, and that `repeatMode: once` spends the rule.
-
-## Evidence
-
-`evidence/` holds output recorded from real runs, read back from dsh's durable
-session log rather than reconstructed:
-
-- `end-to-end-prompt-layers.txt` — a live run with `.omp/rules` next to a control
-  run in a directory with none, showing the two injected layers appear only in
-  the first.
-- `interrupt-vs-warning.txt` — the same violating prompt under an interrupting
-  rule and a warning-only rule, showing the aborted turn and the
-  `<system-interrupt>` retry against the completed turn and the
-  `<system-reminder>`.
-- `modu-system-prompt.txt` — a real 19-rule OMP rule set loaded and rendered.
 
 ## License
 

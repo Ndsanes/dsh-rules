@@ -10,3 +10,7 @@ src/generated/
 # repo, not here.
 market-PR.md
 market-entry.yml
+
+# Transcripts recorded from real runs. They quote prompts produced by tooling
+# that is not open source, so they stay local.
+evidence/
