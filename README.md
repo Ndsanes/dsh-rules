@@ -228,13 +228,19 @@ block and a `body`, and the file lands in whichever directory that scope
 resolves to — see below. It joins the audit like any other project rule, so it
 can be edited or deleted from the panel.
 
-Three things are refused rather than written:
+Five things are refused rather than written:
 
 - **A name that is a path.** The name becomes a filename, so `../`, a path
   separator, a leading dot or a character the filesystem reserves all stop it
   before anything is joined to a path.
 - **A name a rule already holds.** Two files claiming one name is a
   configuration that silently applies only one of them.
+- **An empty body.** There would be nothing for the model to read.
+- **Frontmatter carrying no settings at all.** The file would load with no
+  trigger and no description, join no bucket, and never reach the model. The bar
+  is otherwise deliberately low: a block js-yaml rejects is read back by the
+  frontmatter reader's line-by-line recovery, so malformed quoting still yields
+  a rule that applies and is not refused.
 - **An existing file.** The create is exclusive, checked on disk rather than
   against the discovered set — a rule that failed to parse is absent from that
   set and would otherwise be overwritten without a word.
