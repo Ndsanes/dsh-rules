@@ -63,6 +63,21 @@ export function apply(ctx: Context, config: Config): void {
   const judge = createJudge(ctx, judgeRoute(resolved))
   const persistDisabled = disabledRulesWriter(ctx, namespace)
   const persistMode = modeOverridesWriter(ctx, namespace)
+
+  /**
+   * Set or clear one rule's mode override.
+   *
+   * Shared by the audit service and the `rule` tool so both write through one
+   * path and cannot disagree about what the profile now says.
+   */
+  const setRuleMode = (
+    name: string,
+    mode: InterruptMode | undefined,
+  ): Promise<ModeWriteResult> =>
+    persistMode(current => [
+      ...current.filter(entry => modeOverrideName(entry) !== name),
+      ...(mode === undefined ? [] : [formatModeOverride(name, mode)]),
+    ])
   let auditCwd: string | undefined
   /**
    * Bumped whenever the audited workspace changes.
@@ -344,13 +359,7 @@ export function apply(ctx: Context, config: Config): void {
     // attempt, so this states intent rather than a snapshot: two mode changes
     // in one turn must both land, not the second overwriting the first with a
     // list that was read before the first was written.
-    async (name, mode) => {
-      const written = await persistMode(current => [
-        ...current.filter(entry => modeOverrideName(entry) !== name),
-        ...(mode === undefined ? [] : [formatModeOverride(name, mode)]),
-      ])
-      return written.ok ? { ok: true, entries: [...written.entries], mode } : written
-    },
+    setRuleMode,
     readRule,
     writeRule,
     listWorkspaces,
@@ -423,6 +432,7 @@ export function apply(ctx: Context, config: Config): void {
       exec => ({
         create: (scope, name, frontmatter, body) => createRule(exec, scope, name, frontmatter, body),
         migrate: (from, to) => migrateRulesFor(exec, from, to),
+        setMode: (name, mode) => setRuleMode(name, mode),
       }),
     )
 

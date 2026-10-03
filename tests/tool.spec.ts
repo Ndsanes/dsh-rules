@@ -58,6 +58,8 @@ function currentLookup(): RuleLookup {
 let created: { scope: string; name: string; frontmatter: string; body: string }[] = []
 let createGuidance = ''
 let migrated: { from: { scope: string; convention: string }; to: { scope: string; convention: string } }[] = []
+let modesSet: { name: string; mode: string | undefined }[] = []
+let modeGuidance = ''
 
 function currentWriter(): RuleWriter {
   return {
@@ -69,6 +71,11 @@ function currentWriter(): RuleWriter {
     migrate: async (from, to) => {
       migrated.push({ from, to })
       return { from: '/from', to: '/to', moved: [], empty: true }
+    },
+    setMode: async (name, mode) => {
+      if (modeGuidance !== '') return { ok: false, guidance: modeGuidance }
+      modesSet.push({ name, mode })
+      return { ok: true, entries: mode === undefined ? [] : [`${name}=${mode}`] }
     },
   }
 }
@@ -247,6 +254,55 @@ describe('createRuleTool', () => {
       const out = await run(tool, { action: 'create', name: 'x', frontmatter: 'description: d', body: 'b' })
       expect(out).toContain('the directory is read-only')
       expect(out).not.toContain('Created rule')
+    })
+  })
+
+  describe('setting a rule mode', () => {
+    beforeEach(() => { modesSet = []; modeGuidance = '' })
+
+    it('writes the mode the model asked for', async () => {
+      active = [rule('ts-set-map', 'body')]
+      const { tool } = captureTool()
+      const out = await run(tool, { action: 'mode', name: 'ts-set-map', mode: 'prose-only' })
+      expect(modesSet).toEqual([{ name: 'ts-set-map', mode: 'prose-only' }])
+      expect(out).toContain('now runs as prose-only')
+    })
+
+    it('clears the override when the mode is omitted', async () => {
+      // Omitted must mean "hand it back to its own file", not "write nothing":
+      // an empty mode would not parse and would fall back to the default, which
+      // is the opposite of what was asked.
+      active = [rule('ts-set-map', 'body')]
+      const { tool } = captureTool()
+      const out = await run(tool, { action: 'mode', name: 'ts-set-map' })
+      expect(modesSet).toEqual([{ name: 'ts-set-map', mode: undefined }])
+      expect(out).toContain('runs however its own file says')
+    })
+
+    it('refuses a mode the parser would not recognise', async () => {
+      active = [rule('ts-set-map', 'body')]
+      const { tool } = captureTool()
+      const out = await run(tool, { action: 'mode', name: 'ts-set-map', mode: 'sometimes' })
+      expect(modesSet).toEqual([])
+      expect(out).toContain('is not an interrupt mode')
+    })
+
+    it('refuses a rule this session does not have, and names what it does', async () => {
+      active = [rule('ts-set-map', 'body'), rule('go-ioutil', 'body')]
+      const { tool } = captureTool()
+      const out = await run(tool, { action: 'mode', name: 'nope', mode: 'never' })
+      expect(modesSet).toEqual([])
+      expect(out).toContain('No rule named "nope"')
+      expect(out).toContain('ts-set-map')
+    })
+
+    it('reports a refused write rather than claiming the mode changed', async () => {
+      active = [rule('ts-set-map', 'body')]
+      modeGuidance = 'no settings service on this deployment'
+      const { tool } = captureTool()
+      const out = await run(tool, { action: 'mode', name: 'ts-set-map', mode: 'never' })
+      expect(out).toContain('no settings service')
+      expect(out).not.toContain('now runs as')
     })
   })
 

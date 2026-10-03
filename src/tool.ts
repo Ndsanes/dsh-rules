@@ -16,8 +16,9 @@
 import { defineTool, type ToolDefinition, type ToolRunContext } from '@deepseek-ai/dsh-tools'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 import { join } from 'node:path'
-import type { Rule } from './rule.ts'
-import type { ToggleResult } from './audit.ts'
+import type { InterruptMode, Rule } from './rule.ts'
+import type { ModeWriteResult, ToggleResult } from './audit.ts'
+import { INTERRUPT_MODES } from './config.ts'
 import { parseFrontmatter } from './frontmatter.ts'
 import type { RuleLocation, RuleScope } from './rulesdir.ts'
 import { renderMigration, type MigrationResult } from './migrate.ts'
@@ -48,6 +49,14 @@ export interface RuleWriter {
     from: { scope: RuleScope; convention: 'omp' | 'dsh' },
     to: { scope: RuleScope; convention: 'omp' | 'dsh' },
   ) => Promise<MigrationResult>
+  /**
+   * Set or clear one rule's interrupt-mode override.
+   *
+   * An override rather than an edit because 27 of the rules have no file to
+   * edit — they ship inside the bundle, so there is nothing to rewrite. A
+   * `mode` of `undefined` clears it, handing the rule back its own value.
+   */
+  setMode: (name: string, mode: InterruptMode | undefined) => Promise<ModeWriteResult>
 }
 
 /** A write outcome that also reports where the file landed. */
@@ -139,10 +148,15 @@ Actions:
   asks to move their rules. Both sides are read by discovery, so a moved rule
   keeps its name and meaning; a rule whose name is already taken at the
   destination is left where it is, and every file that moves is reported.
+- mode: set how hard one rule hits when it fires. Give a name and a mode from
+  always, prose-only, tool-only or never. Omit the mode to hand the rule back its
+  own value. Reach for this when a rule interrupts far more than the user wants
+  — a gentler mode still guides the model without cutting the stream, where
+  switching the rule off removes it entirely.
 - enable / disable: turn one bundled rule off or on. Applies to the next step.
 
 Parameters:
-- action: one of load, list, create, migrate, enable, disable. Defaults to load.
+- action: one of load, list, create, migrate, mode, enable, disable. Defaults to load.
 - name: exact rule name (addressed as rule://<name>). Required for load,
   enable, and disable; ignored by list. For create, the new rule's name.
 - frontmatter: the YAML frontmatter block, without the --- fences. For create.
@@ -151,7 +165,8 @@ Parameters:
   global ones apply to every workspace. For create, and the source of migrate.
 - fromConvention: omp (default) or dsh. Only for migrate.
 - toScope: project or global. Omit to leave the scope unchanged. Only for migrate.
-- toConvention: omp or dsh. Omit to keep the source convention. Only for migrate.`
+- toConvention: omp or dsh. Omit to keep the source convention. Only for migrate.
+- mode: always, prose-only, tool-only or never. Omit to clear. Only for mode.`
 
 /** One addressable snapshot for a single agent. */
 export interface RuleSnapshot {
@@ -279,6 +294,10 @@ export function createRuleTool(
         type: 'string',
         description: 'Destination convention: omp or dsh. Omit to keep the source convention. Only for migrate.',
       },
+      mode: {
+        type: 'string',
+        description: 'always, prose-only, tool-only or never. Omit to clear the override. Only for mode.',
+      },
     },
     output: {
       schema: { type: 'string' },
@@ -350,6 +369,33 @@ export function createRuleTool(
             : args.toConvention === 'omp' ? 'omp' : from.convention,
         }
         return renderMigration(await write(exec).migrate(from, to))
+      }
+
+      if (action === 'mode') {
+        const known = new Set(snapshot.all.map(rule => rule.name))
+        if (!known.has(name)) {
+          const names = [...known].sort().slice(0, 12)
+          return `No rule named "${name}" in this session. ` +
+            `Rules here: ${names.join(', ') || 'none'}${known.size > 12 ? ', …' : ''}`
+        }
+        // An absent `mode` clears the override. Asking for a rule's own value
+        // back is a request to remove it, not to write an empty mode — the
+        // parser would not recognise that and would fall back to the default,
+        // which is the opposite of what was asked for.
+        const requested = args.mode
+        if (requested !== undefined && !INTERRUPT_MODES.includes(requested as InterruptMode)) {
+          return `"${requested}" is not an interrupt mode. Use one of: ${INTERRUPT_MODES.join(', ')}.`
+        }
+        const mode = requested as InterruptMode | undefined
+        const outcome = await write(exec).setMode(name, mode)
+        if (!outcome.ok) {
+          return 'guidance' in outcome
+            ? outcome.guidance
+            : 'The mode change was overtaken by another write. Try again.'
+        }
+        return mode === undefined
+          ? `"${name}" now runs however its own file says. Applies on the next step.`
+          : `"${name}" now runs as ${mode}. Applies on the next step.`
       }
 
       if (action === 'enable' || action === 'disable') {
