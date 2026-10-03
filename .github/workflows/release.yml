@@ -1,0 +1,129 @@
+# Publish to npm, from this repository, without a stored secret.
+#
+# Authentication is npm's Trusted Publishing: GitHub mints a short-lived OIDC
+# token, npm exchanges it for a publish token scoped to this run, and neither is
+# stored anywhere. There is no `NPM_TOKEN` secret here on purpose — a
+# long-lived automation token is a thing to protect, rotate and eventually
+# revoke, and this repository has no reason to own one.
+#
+# A release is a merge into `main`. Development happens on `dev`; merging it in
+# is the decision to ship, so this runs on `main` and not on `dev`.
+#
+# Requires on npmjs.com (package settings → Trusted Publisher → GitHub Actions):
+#   Organization or user : Ndsanes
+#   Repository           : dsh-rules
+#   Workflow filename    : release.yml      ← filename only, not a path
+#   Allowed actions      : `npm publish`    ← ticked on by default; `npm stage
+#                          publish` alone is NOT enough, or this job fails with 401
+
+name: Release
+
+on:
+  push:
+    branches: [main]
+  # A manual run publishes whatever version package.json carries, which is the
+  # escape hatch when a merge landed without one.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write # required: this is what lets GitHub vouch for the publish
+
+# One release at a time. npm rejects a second publish of the same version
+# anyway, but failing fast beats discovering it after a full build.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24' # Trusted Publishing needs >= 22.14
+          # Deliberately no cache: a cached store is a copy of this project's
+          # dependency tree on someone else's disk, and npm says so outright.
+          cache: false
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run typecheck
+      - run: pnpm test
+      - run: pnpm run build
+      - name: The built artifacts are what ships
+        # Guards the build-ordering bugs this project has already had: a green
+        # test run over a stale bundle proves nothing about what gets published.
+        # Written in node because `stat` differs between BSD and GNU and this
+        # only ever runs on a Linux runner.
+        run: |
+          node -e "
+            const fs=require('fs');
+            for (const f of ['lib/index.mjs','lib/typert.host.mjs','lib/types/index.d.ts','client/client.js'])
+              if(!fs.existsSync(f)) throw new Error('missing build output: '+f);
+            const m=p=>fs.statSync(p).mtimeMs;
+            for (const [out,src] of [['lib/index.mjs','src/index.ts'],['client/client.js','src/client/index.js']])
+              if(m(out)<m(src)) throw new Error(out+' is older than '+src+' — the bundle is stale');
+          "
+      - name: The tarball declares the entry points package.json advertises
+        run: |
+          npm pack --dry-run --json > pack.json
+          node -e "
+            const fs=require('fs');
+            const files=new Set(JSON.parse(fs.readFileSync('pack.json','utf8'))[0].files.map(f=>f.path));
+            const pkg=require('./package.json');
+            const wanted=['lib/index.mjs','lib/typert.host.mjs','client/client.js','lib/types/index.d.ts','cordis.patch.yml','LICENSE'];
+            const missing=wanted.filter(f=>!files.has('package/'+f));
+            if(missing.length) throw new Error('tarball is missing: '+missing.join(', '));
+          "
+
+  publish:
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # to create the GitHub Release
+      id-token: write
+    steps:
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+          cache: false
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run build
+      - name: Skip when this version is already on npm
+        # A merge that does not bump the version has nothing to publish, and
+        # failing the whole run on it would report a broken release for a commit
+        # that changed nothing about the package.
+        run: |
+          NAME=$(node -p "require('./package.json').name")
+          VERSION=$(node -p "require('./package.json').version")
+          if npm view "$NAME@$VERSION" version >/dev/null 2>&1; then
+            echo "::notice::$NAME@$VERSION is already published — nothing to do"
+            echo "SKIP=1" >> "$GITHUB_ENV"
+          else
+            echo "SKIP=0" >> "$GITHUB_ENV"
+          fi
+      - name: Publish
+        if: env.SKIP == '0'
+        run: pnpm publish --access public --provenance --registry=https://registry.npmjs.org
+      - name: Attach the tarball to a GitHub Release
+        # The asset name carries no version on purpose. The marketplace listing
+        # points `tarball:` at `releases/latest/download/<name>`, and that URL
+        # takes the filename literally — a versioned name works the day it is
+        # uploaded and 404s at the next release, with nothing failing. A fixed
+        # name keeps the link true forever.
+        if: env.SKIP == '0'
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          npm pack --pack-destination dist
+          gh release create "v$VERSION" \
+            --title "$VERSION" \
+            --generate-notes \
+            dist/*.tgz#dsh-rules.tgz

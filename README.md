@@ -443,6 +443,17 @@ rule directory.
 
 ## Development
 
+Branches carry the release decision: work lands on `dev`, and merging `dev`
+into `main` is what ships. The `Release` workflow watches `main`, so the merge is
+the approval — there is no separate publish button to press.
+
+Publishing uses npm Trusted Publishing, so the workflow holds no token. GitHub
+vouches for the run with a short-lived OIDC credential that npm exchanges for a
+publish token scoped to that one run. Configure it once on npmjs.com under the
+package's Trusted Publisher settings: user `Ndsanes`, repository `dsh-rules`,
+workflow filename `release.yml`, with `npm publish` among the allowed actions.
+
+
 ```bash
 pnpm install
 pnpm test           # vitest
