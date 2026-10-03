@@ -69,14 +69,19 @@ jobs:
               if(m(out)<m(src)) throw new Error(out+' is older than '+src+' — the bundle is stale');
           "
       - name: The tarball declares the entry points package.json advertises
+        # `--ignore-scripts`: the build already ran as its own step, and the
+        # prepack lifecycle writes its own progress to stdout, which lands in
+        # the JSON stream and is not parseable.
         run: |
-          npm pack --dry-run --json > pack.json
+          npm pack --dry-run --json --ignore-scripts > pack.json
           node -e "
             const fs=require('fs');
-            const files=new Set(JSON.parse(fs.readFileSync('pack.json','utf8'))[0].files.map(f=>f.path));
-            const pkg=require('./package.json');
+            const raw=fs.readFileSync('pack.json','utf8');
+            // npm has reported these paths both with and without a leading
+            // `package/`, so normalise rather than assume one.
+            const files=new Set(JSON.parse(raw.slice(raw.indexOf('[')))[0].files.map(f=>f.path.replace(/^package\//,'')));
             const wanted=['lib/index.mjs','lib/typert.host.mjs','client/client.js','lib/types/index.d.ts','cordis.patch.yml','LICENSE'];
-            const missing=wanted.filter(f=>!files.has('package/'+f));
+            const missing=wanted.filter(f=>!files.has(f));
             if(missing.length) throw new Error('tarball is missing: '+missing.join(', '));
           "
 
