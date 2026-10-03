@@ -276,7 +276,7 @@ describe('looksLikeGlob', () => {
 
 describe('withModeOverrides', () => {
   it('gives a named rule the override as its mode', () => {
-    const [applied] = withModeOverrides([{ name: 'ts-set-map' }], { 'ts-set-map': 'never' })
+    const [applied] = withModeOverrides([{ name: 'ts-set-map', interruptMode: undefined }], { 'ts-set-map': 'never' })
     expect(applied?.interruptMode).toBe('never')
   })
 
@@ -284,7 +284,7 @@ describe('withModeOverrides', () => {
     // The 27 rules that ship with the plugin are module-level constants shared
     // by every session; writing to one would leak an override into a session
     // that never asked for it.
-    const original = { name: 'ts-set-map' }
+    const original: { name: string; interruptMode?: 'never' } = { name: 'ts-set-map' }
     withModeOverrides([original], { 'ts-set-map': 'never' })
     expect(original.interruptMode).toBeUndefined()
   })
