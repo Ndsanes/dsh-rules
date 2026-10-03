@@ -10,6 +10,8 @@
  */
 
 import { builtinRuleNames } from './builtin.ts'
+import { INTERRUPT_MODES } from './config.ts'
+import type { InterruptMode } from './rule.ts'
 import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -33,8 +35,18 @@ export interface RuleAuditRow {
   reason?: string
   description?: string
   globs?: string[]
-  /** `always`, `prose-only`, `tool-only`, or `never`. */
+  /** `always`, `prose-only`, `tool-only`, or `never`: the mode in force now. */
   interruptMode?: string
+  /**
+   * What the rule states for itself, before any override.
+   *
+   * Carried beside the effective mode because an overridden rule no longer says
+   * what it would have said: without this, clearing an override could only put
+   * back the value it replaced.
+   */
+  ownInterruptMode?: string
+  /** The `ttsr.modeOverrides` entry in force for this rule, when there is one. */
+  modeOverride?: string
   /** How the rule triggers: `condition`, `ast-grep`, `question`, or none. */
   triggers: string[]
 }
@@ -209,6 +221,40 @@ export interface ToggleResult {
   disabled: string[]
 }
 
+/**
+ * The result of an interrupt-mode change.
+ *
+ * `mode` echoes the override now in force, and is absent once the rule speaks
+ * for itself again — the same shape as {@link ToggleResult}'s `disabled`, which
+ * also answers with the state rather than with what was asked for.
+ */
+export interface ModeChangeResult {
+  ok: boolean
+  /** Present when the change was not saved, with what to do instead. */
+  guidance?: string
+  mode?: InterruptMode
+}
+
+/**
+ * What the page asks for: a mode to force, or nothing to let the rule speak.
+ *
+ * `''` is how the wire carries "no override" — the page's selector offers a
+ * blank option, and JSON has no `undefined` to send instead.
+ */
+export type ModeRequest = InterruptMode | '' | undefined
+
+/**
+ * What the writer reports back.
+ *
+ * The `conflict` arm is what the writer reports when three conditional writes
+ * were each overtaken by a racing one. It never reaches a reader — the writer
+ * turns it into guidance before returning — but callers must be able to say so.
+ */
+export type ModeWriteResult =
+  | { ok: true; entries: readonly string[] }
+  | { ok: false; guidance: string }
+  | { ok: false; conflict: true }
+
 /** Publishes one discovery pass for the audit page. */
 export type AuditPublisher = (report: RuleAuditReport) => void
 
@@ -255,6 +301,17 @@ export interface RulesAuditService {
    * one. Names the current report has never heard of are refused.
    */
   setDisabled(names: readonly string[]): Promise<ToggleResult>
+  /**
+   * Set or clear one rule's interrupt-mode override.
+   *
+   * `ttsr.modeOverrides` is matched by rule name like `disabledRules`, so this
+   * reaches every rule and not only the bundled ones — and it is the only way
+   * to change the mode of one of the 27 rules that ship compiled into the
+   * plugin, with no file behind them to edit. `undefined` (or the empty string
+   * the wire carries it as) drops the override and puts the rule's own value,
+   * or the profile default, back in charge.
+   */
+  setMode(name: string, mode: ModeRequest): Promise<ModeChangeResult>
   /** Rule names the page may toggle: everything the current report knows. */
   readonly toggleable: readonly string[]
   /**
@@ -293,6 +350,8 @@ export function createAuditService(
   currentDisabled: () => readonly string[],
   /** Persists a new disabled-rule set. */
   toggle: (names: readonly string[]) => Promise<ToggleResult>,
+  /** Persists one rule's interrupt-mode override; `undefined` clears it. */
+  modeWriter: (name: string, mode: InterruptMode | undefined) => Promise<ModeWriteResult>,
   /** Reads a rule's backing file by name. */
   readRule: (name: string) => Promise<ReadRuleResult>,
   /** Writes a rule's backing file by name. */
@@ -412,6 +471,57 @@ export function createAuditService(
       return { ok: true, disabled }
     },
 
+    /**
+     * Set or clear one rule's interrupt-mode override.
+     *
+     * The report is rebuilt here rather than left to the next `audit()`, for
+     * the reason `setDisabled` does the same: the page that made the change is
+     * the one watching, and a row still reading `in force · never` after the
+     * reader picked `always` says the click did nothing.
+     */
+    async setMode(name: string, requested: ModeRequest) {
+      // Same known-name set as `setDisabled`: `ttsr.modeOverrides` is keyed by
+      // rule name against everything discovery finds, so a project rule is as
+      // adjustable as a bundled one, and the bundled names apply with no
+      // workspace open.
+      const known = new Set([...report.rules.map(rule => rule.name), ...builtinRuleNames()])
+      if (!known.has(name)) {
+        return {
+          ok: false,
+          guidance: `no rule by that name is in force here: ${name}. ` +
+            'Open the workspace that declares it first; it may be filtered out of this one.',
+        }
+      }
+
+      const mode = requested === '' || requested === undefined ? undefined : requested
+      // The selector only offers the four modes, so this is a hand-written
+      // call rather than a page bug — refused anyway, because an unknown mode
+      // is stored verbatim and then ignored, leaving the reader believing it
+      // took.
+      if (mode !== undefined && !INTERRUPT_MODES.includes(mode)) {
+        return {
+          ok: false,
+          guidance: `${String(requested)} is not an interrupt mode; use one of ${INTERRUPT_MODES.join(', ')}.`,
+        }
+      }
+
+      const written = await modeWriter(name, mode)
+      if (!written.ok) {
+        return {
+          ok: false,
+          guidance: 'guidance' in written
+            ? written.guidance
+            : 'Three attempts to save the mode change were each overtaken by another one. Try again.',
+        }
+      }
+
+      report = {
+        ...report,
+        rules: report.rules.map(rule => (rule.name === name ? withMode(rule, mode) : rule)),
+      }
+      return { ok: true, mode }
+    },
+
     typertRemote: {
       get service() {
         return service
@@ -445,6 +555,20 @@ function disabledOf(report: RuleAuditReport): string[] {
   return report.rules.filter(rule => rule.reason === 'disabled').map(rule => rule.name)
 }
 
+/**
+ * One report row as it reads with `mode` in force.
+ *
+ * Clearing an override puts the rule's own value back, which is why the row
+ * carries it: by the time the reader clears, `interruptMode` is the override
+ * and says nothing about what the rule itself asked for. A rule that declared
+ * none falls back to the profile's `ttsr.interruptMode`, which is what an
+ * absent mode means everywhere else on the page.
+ */
+function withMode(rule: RuleAuditRow, mode: InterruptMode | undefined): RuleAuditRow {
+  if (mode === undefined) return { ...rule, interruptMode: rule.ownInterruptMode, modeOverride: undefined }
+  return { ...rule, interruptMode: mode, modeOverride: mode }
+}
+
 /** Compare two name sets without regard to order. */
 function sameSet(left: readonly string[], right: readonly string[]): boolean {
   return left.length === right.length && left.every(name => right.includes(name))
@@ -460,6 +584,7 @@ export function provideAuditService(
   recompute: () => Promise<RuleAuditReport>,
   currentDisabled: () => readonly string[],
   toggle: (names: readonly string[]) => Promise<ToggleResult>,
+  modeWriter: (name: string, mode: InterruptMode | undefined) => Promise<ModeWriteResult>,
   readRule: (name: string) => Promise<ReadRuleResult>,
   writeRule: (name: string, content: string) => Promise<ToggleResult>,
   listWorkspaces: () => WorkspaceRef[],
@@ -467,7 +592,7 @@ export function provideAuditService(
   closeWorkspace: (explicit?: boolean) => void,
 ): AuditPublisher {
   const service = createAuditService(
-    recompute, currentDisabled, toggle, readRule, writeRule, listWorkspaces, openWorkspace, closeWorkspace)
+    recompute, currentDisabled, toggle, modeWriter, readRule, writeRule, listWorkspaces, openWorkspace, closeWorkspace)
   ctx.provide('dshRules', service)
   return report => service.publish(report)
 }

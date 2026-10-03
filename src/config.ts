@@ -229,6 +229,20 @@ export function formatModeOverride(name: string, mode: InterruptMode): string {
   return `${name}=${mode}`
 }
 
+/**
+ * The rule one stored override entry names, or `undefined` when it names none.
+ *
+ * The counterpart of {@link formatModeOverride}, and it splits on the *last*
+ * `=` for the same reason {@link normalise} does: a rule name may contain one,
+ * and the mode is the fixed vocabulary that follows it. Anyone rewriting the
+ * list has to recognise entries the same way, or clearing one rule's override
+ * would leave another's behind.
+ */
+export function modeOverrideName(entry: string): string | undefined {
+  const at = entry.lastIndexOf('=')
+  return at <= 0 ? undefined : entry.slice(0, at)
+}
+
 /** Report whether a config field is a live reference rather than plain data. */
 function isVolatileRef(value: unknown): value is { get(): ResolvedTtsrConfig | undefined } {
   return typeof (value as { get?: unknown } | undefined)?.get === 'function'

@@ -9,6 +9,7 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 
 import manifest from '../package.json' with { type: 'json' }
+import { INTERRUPT_MODES } from '../src/config.ts'
 import { TYPERT } from '../src/typert.host.ts'
 
 /**
@@ -87,6 +88,7 @@ interface FakeClientContext {
     dshRules: {
       audit: () => Promise<unknown>
       setDisabled: (names: readonly string[]) => Promise<unknown>
+      setMode: (name: string, mode: string) => Promise<unknown>
     }
   }
   inject: (names: readonly string[], register: (ctx: FakeClientContext) => void) => void
@@ -124,6 +126,10 @@ function buildContext(report?: Record<string, unknown>): FakeClientContext {
         setDisabled: (names: readonly string[]) => {
           remoteCalls.push(`setDisabled:${names.join(',')}`)
           return Promise.resolve({ ok: true, disabled: [...names] })
+        },
+        setMode: (name: string, mode: string) => {
+          remoteCalls.push(`setMode:${name}=${mode}`)
+          return Promise.resolve({ ok: true })
         },
       },
       $mount: (contribution: unknown) => {
@@ -555,6 +561,50 @@ describe('bundled rule toggles', () => {
     expect(html).toContain('other')
     expect(html).toContain('Audit it')
     expect(html).toContain('Close')
+  })
+
+  it('offers a mode selector on every row, bundled rules included', () => {
+    // 27 of the rules that ship with this plugin have no file to edit, so this
+    // selector is the only control they have. Hiding it the way the Edit button
+    // is hidden would leave exactly those rules unadjustable from the panel.
+    const html = renderToggles(buildContext())
+    expect((html.match(/<select/g) ?? []).length).toBe(27)
+    // The blank option is what "follows the rule" looks like, and the fallback
+    // catalogue says nothing about a mode, so it falls back to the profile's.
+    expect(html).toContain('Follow the profile default')
+    expect(html).toContain('<option value="always"')
+  })
+
+  it('selects the override a rule carries rather than the mode in force', () => {
+    // Both values are on the row, and only one of them is what the reader
+    // chose: showing the effective mode as the selected option would make an
+    // override that merely matches the rule look like no override at all.
+    const html = renderToggles(buildContext(), {
+      cwd: '/x', rulebook: [], alwaysApply: [], ttsr: [], warnings: [], triggered: {},
+      rules: [
+        {
+          name: 'ts-set-map', provider: 'builtin-defaults', path: 'b.ts', active: true,
+          triggers: ['condition'], interruptMode: 'always', ownInterruptMode: 'never', modeOverride: 'always',
+        },
+      ],
+    })
+    expect(html).toContain('Follow the rule (never)')
+    expect(html).toMatch(/<option value="always" selected="?">always<\/option>/)
+  })
+
+  it('offers the same four modes the Host accepts, in the same order', () => {
+    // The browser half cannot import `INTERRUPT_MODES` from the Host's config —
+    // that module reaches for schemastery and zod, which the loader's platform
+    // table does not carry — so the list is copied. Read through the rendered
+    // page rather than the source: a drift that only reached the bundle would
+    // otherwise pass here.
+    const html = renderToggles(buildContext(), {
+      cwd: '/x', rulebook: [], alwaysApply: [], ttsr: [], warnings: [], triggered: {},
+      rules: [{ name: 'ts-set-map', provider: 'builtin-defaults', path: 'b.ts', active: true, triggers: ['condition'] }],
+    })
+    const options = /<select[^>]*>([\s\S]*?)<\/select>/.exec(html)?.[1] ?? ''
+    expect([...options.matchAll(/<option value="([^"]*)"/g)].map(entry => entry[1]))
+      .toEqual(['', ...INTERRUPT_MODES])
   })
 
   it('offers select-all and bulk enable and disable', () => {

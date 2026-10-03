@@ -161,6 +161,8 @@ async function render(options: {
   file?: { name: string; path: string; content: string; editable: boolean }
   /** What `writeRule` resolves to. A refusal carries the Host's guidance. */
   writeReply?: ToggleResult | Promise<ToggleResult>
+  /** What `setMode` resolves to; a refusal carries the Host's guidance. */
+  modeReply?: { ok: boolean; guidance?: string } | Promise<{ ok: boolean; guidance?: string }>
   /** Make the editor's serialise call refuse with this message. */
   serialiseRefusal?: string
 }): Promise<{
@@ -171,11 +173,14 @@ async function render(options: {
   closes: () => number
   /** One entry per `writeRule` call, in the order the page made them. */
   writes: () => string[][]
+  /** One `<name>=<mode>` entry per `setMode` call, in the order the page made them. */
+  modes: () => string[]
   dispose: () => void
 }> {
   const bundle = await loadBundle(options.serialiseRefusal)
   const calls: string[][] = []
   const writes: string[][] = []
+  const modes: string[] = []
   const opened: string[] = []
   let closed = 0
 
@@ -204,6 +209,12 @@ async function render(options: {
         return { ok: true, value: { ok: true, disabled: [] } }
       },
       closeWorkspace: async () => { closed += 1; return { ok: true, value: undefined } },
+      setMode: (name: string, mode: string) => {
+        // The empty string is how the selector says "follow the rule again",
+        // which the Host turns into a cleared override.
+        modes.push(`${name}=${mode}`)
+        return Promise.resolve(options.modeReply ?? { ok: true }).then(value => ({ ok: true, value }))
+      },
       setDisabled: (names: string[]) => {
         calls.push(names)
         // Deliberately not `async`: the gateway validates arguments before it
@@ -254,6 +265,7 @@ async function render(options: {
     opened: () => opened,
     closes: () => closed,
     writes: () => writes,
+    modes: () => modes,
     // Every assertion scopes to this container. A failing test never reaches
     // `dispose`, so a later one querying the document would find this run's
     // container or an earlier run's stale tree instead of its own.
@@ -310,6 +322,17 @@ function togglesIn(container: ParentNode): HTMLElement {
 function editIn(container: ParentNode, name: string): HTMLButtonElement | undefined {
   return [...rowFor(container, name).querySelectorAll('button')]
     .find(candidate => candidate.textContent?.trim() === 'Edit')
+}
+
+/**
+ * The mode selector in one rule's row, or `undefined` when the row has none.
+ *
+ * Asked for as an option rather than thrown on, because a bundled row with no
+ * selector is exactly the failure under test, and a throw would report it as a
+ * missing element instead of as an absence.
+ */
+function modeSelectIn(container: ParentNode, name: string): HTMLSelectElement | undefined {
+  return rowFor(container, name).querySelector('select') ?? undefined
 }
 
 /** A button in `container` by its exact visible label, or `undefined`. */
@@ -613,6 +636,70 @@ describe('the rule section in a browser', () => {
     await settle()
 
     expect(view.calls).toEqual([['ts-set-map']])
+    view.dispose()
+  })
+
+  it('changes the mode of a bundled rule, which has no file to edit', async () => {
+    // `ts-set-map` ships compiled into the plugin: no Edit button, no path to
+    // write. The mode selector is the only control this rule has, so a row
+    // without one is a rule nobody can change.
+    const view = await render({ reply: () => ({ ok: true }) })
+    await settle()
+
+    expect(editIn(view.container, 'ts-set-map')).toBeUndefined()
+    const select = modeSelectIn(view.container, 'ts-set-map')
+    expect(select).not.toBeUndefined()
+    expect([...select!.options].map(option => option.value))
+      .toEqual(['', 'never', 'prose-only', 'tool-only', 'always'])
+    // `ts-set-map` declares `never`, so the blank option is the one selected:
+    // nothing has overridden it yet.
+    expect(select!.value).toBe('')
+
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(select!), 'value')?.set
+      setter?.call(select!, 'always')
+      select!.dispatchEvent(new Event('change', { bubbles: true }))
+    })
+    await settle()
+
+    expect(view.modes()).toEqual(['ts-set-map=always'])
+    view.dispose()
+  })
+
+  it('sends the empty mode when the reader puts a rule back on its own', async () => {
+    // The blank option has to reach the Host as something it will clear, not as
+    // a mode the selector cannot spell.
+    const view = await render({ reply: () => ({ ok: true }) })
+    await settle()
+
+    const select = modeSelectIn(view.container, 'go-ioutil')!
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(select), 'value')?.set
+      setter?.call(select, '')
+      select.dispatchEvent(new Event('change', { bubbles: true }))
+    })
+    await settle()
+
+    expect(view.modes()).toEqual(['go-ioutil='])
+    view.dispose()
+  })
+
+  it('shows the host refusal when a mode change is refused', async () => {
+    const view = await render({
+      reply: () => ({ ok: true }),
+      modeReply: { ok: false, guidance: 'no settings service on this deployment' },
+    })
+    await settle()
+
+    const select = modeSelectIn(view.container, 'ts-set-map')!
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(select), 'value')?.set
+      setter?.call(select, 'always')
+      select.dispatchEvent(new Event('change', { bubbles: true }))
+    })
+    await settle()
+
+    expect(view.html()).toContain('no settings service on this deployment')
     view.dispose()
   })
 
@@ -1097,8 +1184,13 @@ describe('editing one rule in the browser', () => {
     // The rows live in one list element, and the editor is neither inside it
     // nor around it. Sharing the section with them is fine — sharing the list
     // is what put the editor at the bottom of it.
-    const row = rowFor(view.container, 'documentation')
-    const list = row.parentElement as HTMLElement
+    // The list is found by its own hook, not by walking up from the row: with
+    // the editor open, the modal holds a `name` field carrying this rule's name,
+    // and a name search over the whole container settles on that field instead
+    // of the rule row. `row.parentElement` then lands inside the editor and the
+    // assertions below measure the wrong thing.
+    const list = togglesIn(view.container).querySelector('[data-dsh-rules="list"]') as HTMLElement
+    const row = rowFor(list, 'documentation')
     expect(list.contains(row)).toBe(true)
     expect(list.querySelectorAll('button').length).toBeGreaterThan(0)
     expect(list.contains(editor)).toBe(false)

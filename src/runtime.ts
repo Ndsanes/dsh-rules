@@ -19,17 +19,17 @@ import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 import type { SettingsForms, SettingsPathOp } from '@deepseek-ai/dsh-settings'
 import type { AssembleContext } from '@deepseek-ai/dsh-system-prompt'
 import type { ToolExecution, ToolRunContext } from '@deepseek-ai/dsh-tools'
-import { directoryExists, provideAuditService, recordTrigger, totalTriggers, triggerCounts, type AuditPublisher, type RuleAuditRow, type ReadRuleResult, type RuleAuditReport, type RuleSourceFile, type ToggleResult, type WorkspaceRef } from './audit.ts'
+import { directoryExists, provideAuditService, recordTrigger, totalTriggers, triggerCounts, type AuditPublisher, type ModeWriteResult, type RuleAuditRow, type ReadRuleResult, type RuleAuditReport, type RuleSourceFile, type ToggleResult, type WorkspaceRef } from './audit.ts'
 import { bucketRules, type Buckets } from './buckets.ts'
 import { createJudge, type Judge } from './judge.ts'
 import { builtinRuleNames, builtinRules } from './builtin.ts'
 import { loadCapability } from './capability.ts'
-import { expandHome, liveTtsr, resolveConfig, type Config, type ResolvedConfig, type ResolvedTtsrConfig } from './config.ts'
+import { expandHome, formatModeOverride, liveTtsr, modeOverrideName, resolveConfig, type Config, type ResolvedConfig, type ResolvedTtsrConfig } from './config.ts'
 import { discoverAll } from './discovery.ts'
 import { dedupeDuplicateBodies, renderAlwaysApply, renderRulebook } from './prompt.ts'
 import { RuleSession, toolPaths, toolSnapshot } from './session.ts'
 import { RuleSessionStore } from './sessions.ts'
-import { withModeOverrides, type Rule } from './rule.ts'
+import { withModeOverrides, type InterruptMode, type Rule } from './rule.ts'
 import { createRuleTool, ruleFilePath, type RuleLookup, type RuleToggle, type RuleWriteResult } from './tool.ts'
 import { ensureRuleDir, resolveRuleDir, ruleDir, type RuleLocation, type RuleScope } from './rulesdir.ts'
 import { migrateRules, type MigrationResult } from './migrate.ts'
@@ -62,6 +62,7 @@ export function apply(ctx: Context, config: Config): void {
   const namespace = resolved.settingsNamespace
   const judge = createJudge(ctx, judgeRoute(resolved))
   const persistDisabled = disabledRulesWriter(ctx, namespace)
+  const persistMode = modeOverridesWriter(ctx, namespace)
   let auditCwd: string | undefined
   /**
    * Bumped whenever the audited workspace changes.
@@ -339,6 +340,17 @@ export function apply(ctx: Context, config: Config): void {
         ? { ok: true, disabled: [...written.names] }
         : { ok: false, guidance: written.guidance, disabled: [...names] }
     },
+    // One entry per rule, and the writer re-reads the live list on every
+    // attempt, so this states intent rather than a snapshot: two mode changes
+    // in one turn must both land, not the second overwriting the first with a
+    // list that was read before the first was written.
+    async (name, mode) => {
+      const written = await persistMode(current => [
+        ...current.filter(entry => modeOverrideName(entry) !== name),
+        ...(mode === undefined ? [] : [formatModeOverride(name, mode)]),
+      ])
+      return written.ok ? { ok: true, entries: [...written.entries], mode } : written
+    },
     readRule,
     writeRule,
     listWorkspaces,
@@ -603,11 +615,41 @@ export type DisabledIntent = (current: readonly string[]) => readonly string[]
 /** Persist a change to the disabled set. */
 export type RuleDisabledWriter = (intent: DisabledIntent) => Promise<{ ok: true; names: readonly string[] } | { ok: false; guidance: string }>
 
+/**
+ * How a caller wants the stored mode overrides to change.
+ *
+ * Intent rather than a snapshot, for the reason {@link DisabledIntent} is: the
+ * plugin's own config has not hot reloaded yet, so two mode changes in one turn
+ * would each send a list read before the other landed.
+ */
+export type ModeOverrideIntent = (current: readonly string[]) => readonly string[]
+
+/** Persist a change to `ttsr.modeOverrides`. */
+export type RuleModeWriter = (intent: ModeOverrideIntent) => Promise<ModeWriteResult>
+
+/**
+ * Which `ttsr` list a write addresses.
+ *
+ * `disabledRules` and `modeOverrides` are both lists of strings stored the same
+ * way, so they share one writer: the same service, the same array semantics,
+ * the same YAML to paste when there is no service at all.
+ */
+type TtsrList = 'disabledRules' | 'modeOverrides'
+
 /** What one attempt produced: written, refused, or overtaken by a racing write. */
 type WriteOutcome =
-  | { ok: true; names: readonly string[] }
+  | { ok: true; entries: readonly string[] }
   | { ok: false; guidance: string }
   | { ok: false; conflict: true }
+
+/**
+ * What the shared write reports back.
+ *
+ * `WriteOutcome` minus the conflict arm: three overtaken attempts are turned
+ * into guidance inside the loop, so no caller is ever handed a write it has to
+ * interpret itself.
+ */
+type WriteResult = Exclude<WriteOutcome, { conflict: true }>
 
 /**
  * Build the writer both the tool and the audit page persist through.
@@ -616,15 +658,40 @@ type WriteOutcome =
  * gets the exact YAML to add rather than a change that was never saved.
  */
 function disabledRulesWriter(ctx: Context, namespace: string): RuleDisabledWriter {
-  const unavailable = (names: readonly string[]): { ok: false; guidance: string } => ({
+  const write = ttsrListWriter(ctx, namespace, 'disabledRules')
+  return async intent => {
+    const written = await write(intent)
+    return written.ok ? { ok: true, names: written.entries } : written
+  }
+}
+
+/**
+ * Build the writer the audit page persists an interrupt-mode change through.
+ *
+ * Same seam as the disabled set, and for the same two reasons: without a
+ * settings service the change is not saved and the reader is told what to add,
+ * and a conditional write keeps two changes in one turn from erasing each other.
+ */
+function modeOverridesWriter(ctx: Context, namespace: string): RuleModeWriter {
+  return ttsrListWriter(ctx, namespace, 'modeOverrides')
+}
+
+/**
+ * The write loop both `ttsr` string lists share.
+ *
+ * Both answer with the entries as stored, or with what to do by hand; the
+ * disabled set's caller renames them back to rule names on the way out.
+ */
+function ttsrListWriter(ctx: Context, namespace: string, list: TtsrList): (intent: DisabledIntent) => Promise<WriteResult> {
+  const unavailable = (entries: readonly string[]): { ok: false; guidance: string } => ({
     ok: false,
     guidance: 'This deployment has no settings service, so the change was not saved. ' +
-      `Add it to the plugin's profile patch by hand:\n\n  ttsr:\n    disabledRules:\n${
-        names.length === 0 ? '      []\n' : names.map(name => `      - ${name}\n`).join('')
+      `Add it to the plugin's profile patch by hand:\n\n  ttsr:\n    ${list}:\n${
+        entries.length === 0 ? '      []\n' : entries.map(entry => `      - ${entry}\n`).join('')
       }`,
   })
 
-  return async (intent: DisabledIntent) => {
+  return async intent => {
     // Cordis refuses property access to a service a plugin did not declare in
     // `inject` — `ctx.settings` throws "cannot get property 'settings' without
     // inject", which reads exactly like a missing service and sent this down the
@@ -642,8 +709,8 @@ function disabledRulesWriter(ctx: Context, namespace: string): RuleDisabledWrite
     // one is rejected rather than overwriting. A retry re-reads and recomputes.
     let last: WriteOutcome = { ok: false, conflict: true }
     for (let attempt = 0; attempt < 3; attempt += 1) {
-      last = await writeOnce(settings, namespace, intent)
-      if (last.ok === true) return { ok: true, names: last.names }
+      last = await writeOnce(settings, namespace, list, intent)
+      if (last.ok === true) return last
       if (!('conflict' in last)) return last
     }
     return {
@@ -653,25 +720,40 @@ function disabledRulesWriter(ctx: Context, namespace: string): RuleDisabledWrite
   }
 }
 
+/** The entries one `ttsr` list currently holds, as the settings entry stores them. */
+function storedEntries(ttsr: ResolvedTtsrConfig, list: TtsrList): readonly string[] {
+  if (list === 'disabledRules') return ttsr.disabledRules
+  // `liveTtsr` folds the override list into a lookup, so it is rendered back
+  // here rather than read raw. That is safe rather than clever: an entry naming
+  // a mode this build does not know is dropped, which is exactly what the
+  // loader does with it, so writing the list back cannot lose a live override.
+  // Such a dead entry is left in the profile rather than swept away — it
+  // governs nothing either way, and a newer build may know the mode again.
+  return Object.entries(ttsr.modeOverrides).map(([name, mode]) => formatModeOverride(name, mode))
+}
+
 /**
  * Read the live entry, resolve the intent against it, and write, once.
  *
  * `mutate` is awaited: it returns a promise, so without the await its rejection
  * escapes this `catch` entirely and the write reports success it never had.
  */
-async function writeOnce(settings: SettingsForms, namespace: string, intent: DisabledIntent): Promise<WriteOutcome> {
+async function writeOnce(settings: SettingsForms, namespace: string, list: TtsrList, intent: DisabledIntent): Promise<WriteOutcome> {
   const descriptor = settings.describe().find(row => row.ns === namespace)
   // `value` is already the namespace's own config, not a fragment of it.
-  const current = liveTtsr(descriptor?.value as Config | undefined).disabledRules
-  const names = [...new Set(intent(current))].sort()
+  const current = storedEntries(liveTtsr(descriptor?.value as Config | undefined), list)
+  const entries = [...new Set(intent(current))].sort()
 
   // `update` merges layers, and a merged empty array does not clear an existing
   // one. Array edits go through path operations, which the service documents as
-  // index-addressed: setting one index appends, unsetting removes.
-  const setOps: SettingsPathOp[] = names.map((name, index) => ({
+  // index-addressed: setting one index appends, unsetting removes. That is also
+  // the only way dropping the last `modeOverrides` entry really removes it —
+  // a merged `[]` would leave the override in force and the selector showing
+  // "follow the rule" while the rule still interrupts.
+  const setOps: SettingsPathOp[] = entries.map((entry, index) => ({
     op: 'set',
-    path: ['ttsr', 'disabledRules', String(index)],
-    value: name,
+    path: ['ttsr', list, String(index)],
+    value: entry,
   }))
 
   // Descending on purpose. The service rejects an `unset` whose index equals the
@@ -679,29 +761,29 @@ async function writeOnce(settings: SettingsForms, namespace: string, intent: Dis
   // ascending walk shrinks out from under itself: dropping all three of
   // `['a','b','c']` would unset 0 (ok), 1 (ok), then 2 against a one-element array
   // and throw. The walk also starts at the tail rather than at zero — the sets
-  // above have already written `names` into 0..names.length-1, so the stale
-  // entries to drop are exactly names.length .. current.length-1, and starting
+  // above have already written `entries` into 0..entries.length-1, so the stale
+  // entries to drop are exactly entries.length .. current.length-1, and starting
   // at zero would delete the very rules the caller asked to keep.
-  const removals = Math.max(0, current.length - names.length)
-  const unsetOps: SettingsPathOp[] = Array.from({ length: removals }, (_, offset) => names.length + removals - 1 - offset)
+  const removals = Math.max(0, current.length - entries.length)
+  const unsetOps: SettingsPathOp[] = Array.from({ length: removals }, (_, offset) => entries.length + removals - 1 - offset)
     .map(index => ({
       op: 'unset',
-      path: ['ttsr', 'disabledRules', String(index)],
+      path: ['ttsr', list, String(index)],
     }))
 
   try {
     if (setOps.length > 0 || unsetOps.length > 0) {
       await settings.mutate(namespace, [...setOps, ...unsetOps], descriptor?.revision)
     }
-    return { ok: true, names }
+    return { ok: true, entries }
   } catch (error) {
     if (isConflict(error)) return { ok: false, conflict: true }
     return {
       ok: false,
       guidance: `The settings service refused the change (${
         error instanceof Error ? error.message : String(error)
-      }). Apply it to the "${namespace}" row by hand: ttsr.disabledRules: [${
-        names.length === 0 ? '' : names.join(', ')
+      }). Apply it to the "${namespace}" row by hand: ttsr.${list}: [${
+        entries.length === 0 ? '' : entries.join(', ')
       }]`,
     }
   }
@@ -738,7 +820,7 @@ async function discoverAudit(cwd: string, config: ResolvedConfig, ttsrConfig: ()
   // directory the process was launched in — so the guard has to stay at the two
   // call sites, where it is covered by tests.
   const live = ttsrConfig()
-  const capability = loadCapability([
+  const providers = [
     { provider: 'builtin-defaults', rules: builtinRules(), warnings: [] },
     ...await discoverAll({
       cwd,
@@ -746,7 +828,16 @@ async function discoverAudit(cwd: string, config: ResolvedConfig, ttsrConfig: ()
       pluginRoots: config.pluginRoots.map(expandHome),
       copilotInstructionDirs: config.copilotInstructionDirs.map(expandHome),
     }),
-  ])
+  ]
+  // The overrides are applied here as they are when a session is built. The
+  // panel reads this report whenever no agent is running — a workspace opened
+  // by hand, or a config change republishing it — and a report that ignored
+  // them would show a rule interrupting on `never` while it interrupts on
+  // whatever the override says.
+  const capability = loadCapability(providers.map(provider => ({
+    ...provider,
+    rules: withModeOverrides(provider.rules, live.modeOverrides),
+  })))
   const buckets = bucketRules(capability.items, {
     builtinRules: live.builtinRules,
     disabledRules: live.disabledRules,
@@ -761,7 +852,35 @@ async function discoverAudit(cwd: string, config: ResolvedConfig, ttsrConfig: ()
       inactive.set(rule.name, inactiveReason(rule, live.disabledRules, live.builtinRules, buckets.dropped.includes(rule)))
     }
   }
-  return auditReport(cwd, capability.all, buckets, inForce, inactive)
+  return auditReport(cwd, capability.all, buckets, inForce, inactive, auditModes(providers, live))
+}
+
+/**
+ * The two mode views a report row has to carry.
+ *
+ * `own` is read from the providers *before* the overrides are applied, because
+ * a rule that has been through `withModeOverrides` no longer says what it
+ * asked for — which is the one thing the page's "follow the rule" option and
+ * clearing an override both need. The first provider to name a rule wins, the
+ * same order discovery resolves a shadowed name in.
+ */
+function auditModes(
+  providers: readonly { rules: readonly Rule[] }[],
+  live: ResolvedTtsrConfig,
+): AuditModes {
+  const own = new Map<string, InterruptMode | undefined>()
+  for (const provider of providers) {
+    for (const rule of provider.rules) {
+      if (!own.has(rule.name)) own.set(rule.name, rule.interruptMode)
+    }
+  }
+  return { own, overrides: live.modeOverrides }
+}
+
+/** The mode values one report needs: what each rule asks for, and what overrides it. */
+interface AuditModes {
+  readonly own: ReadonlyMap<string, InterruptMode | undefined>
+  readonly overrides: Readonly<Record<string, InterruptMode>>
 }
 
 /** Build the audit report the settings page renders. */
@@ -771,6 +890,7 @@ function auditReport(
   buckets: Buckets,
   inForce: ReadonlySet<string>,
   inactive: ReadonlyMap<string, string>,
+  modes: AuditModes,
 ): RuleAuditReport {
   const rules: RuleAuditRow[] = discovered.map(rule => {
     const triggers: string[] = []
@@ -790,7 +910,17 @@ function auditReport(
     if (reason !== undefined) row.reason = reason
     if (rule.description !== undefined) row.description = rule.description
     if (rule.globs !== undefined) row.globs = rule.globs
+    // The mode in force is the row's headline number, so it is what an
+    // override replaces: the page's selector edits exactly that value, and the
+    // two must not be able to disagree about what is in force.
     if (rule.interruptMode !== undefined) row.interruptMode = rule.interruptMode
+    // The rule's own value travels beside it, because the selector's "follow
+    // the rule" option has to name what following means — and because clearing
+    // an override needs it to put the row back.
+    const own = modes.own.get(rule.name)
+    if (own !== undefined) row.ownInterruptMode = own
+    const override = modes.overrides[rule.name]
+    if (override !== undefined) row.modeOverride = override
     return row
   })
 
@@ -897,7 +1027,7 @@ async function buildSession(
   }
 
   onAuditWorkspace(cwd)
-  publishAudit(auditReport(cwd, capability.all, buckets, inForce, inactive))
+  publishAudit(auditReport(cwd, capability.all, buckets, inForce, inactive, auditModes(providers, live)))
 
 
   return new RuleSession(

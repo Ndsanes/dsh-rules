@@ -340,7 +340,7 @@ describe('a switched-off project rule', () => {
         return report
       },
       () => disabled,
-      async names => ({ ok: true, disabled: [...names] }),
+      async names => ({ ok: true, disabled: [...names] }),async () => ({ ok: true, entries: [] }), 
       async () => ({ ok: false, guidance: 'unused', disabled: [] }),
       async () => ({ ok: false, guidance: 'unused', disabled: [] }),
       () => [],
@@ -377,7 +377,7 @@ describe('a switched-off project rule', () => {
     const service = createAuditService(
       async () => report,
       () => disabled,
-      async names => { disabled = [...names]; return { ok: true, disabled } },
+      async names => { disabled = [...names]; return { ok: true, disabled } },async () => ({ ok: true, entries: [] }), 
       async () => ({ ok: false, guidance: 'unused', disabled: [] }),
       async () => ({ ok: false, guidance: 'unused', disabled: [] }),
       () => [],
@@ -429,7 +429,7 @@ describe('a disabled name this report has never heard of', () => {
         return report
       },
       () => disabled,
-      async names => { disabled = [...names]; return { ok: true, disabled } },
+      async names => { disabled = [...names]; return { ok: true, disabled } },async () => ({ ok: true, entries: [] }), 
       async () => ({ ok: false, guidance: 'unused', disabled: [] }),
       async () => ({ ok: false, guidance: 'unused', disabled: [] }),
       () => [],

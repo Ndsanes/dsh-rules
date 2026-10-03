@@ -56,6 +56,20 @@ export const CODECS = {
   auditReport: () => strictCodec('RuleAuditReport', value => parseObject(value, 'report')),
   /** `setDisabled` / `openWorkspace` result. */
   toggleResult: () => strictCodec('ToggleResult', value => parseObject(value, 'result')),
+  /**
+   * `setMode` second argument: a mode, or empty to let the rule speak again.
+   *
+   * Deliberately not the four modes: that vocabulary is the Host's, and a
+   * client codec that refused a mode a newer Host had learned to accept would
+   * fail the write in the browser — with the page blaming a list it cannot
+   * see. The Host validates the value and says so if it does not.
+   */
+  interruptMode: () => strictCodec('InterruptMode', value => {
+    if (typeof value !== 'string' || value.length > 32) fail('mode must be a string of at most 32 characters')
+    return value
+  }),
+  /** `setMode` result. */
+  modeChangeResult: () => strictCodec('ModeChangeResult', value => parseObject(value, 'result')),
   /** `listWorkspaces` result: each entry needs at least an id, path and title. */
   workspaceList: () => strictCodec('WorkspaceList', value => {
     if (!Array.isArray(value)) fail('workspaces must be an array')

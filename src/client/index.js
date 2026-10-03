@@ -78,6 +78,18 @@ window.__ModuleLoader__.load({
           result: CODECS.toggleResult(),
         },
         {
+          id: `${PACKAGE_NAME}#dshRules/setMode`,
+          service: 'dshRules',
+          namespace: 'dshRules',
+          method: 'setMode',
+          invocation: { kind: 'direct' },
+          parameters: [
+            { name: 'name', wire: 'name', source: 'json', codec: CODECS.ruleName() },
+            { name: 'mode', wire: 'mode', source: 'json', codec: CODECS.interruptMode() },
+          ],
+          result: CODECS.modeChangeResult(),
+        },
+        {
           id: `${PACKAGE_NAME}#dshRules/readRule`,
           service: 'dshRules',
           namespace: 'dshRules',
@@ -131,6 +143,16 @@ window.__ModuleLoader__.load({
     /** Bundled rule names and descriptions, generated from the same Markdown the Host loads. */
     const BUNDLED = Object.entries(require('./builtin-catalog.js').BUNDLED_RULES)
       .map(([name, description]) => ({ name, description }))
+
+    /**
+     * Every mode a rule may be overridden to, in the order the selector offers.
+     *
+     * A copy of `INTERRUPT_MODES` in `src/config.ts`: the module that owns the
+     * list reaches for schemastery and zod, which the loader's platform table
+     * does not carry, so the browser half cannot import it. A test reads both
+     * files and fails if they drift.
+     */
+    const INTERRUPT_MODES = ['never', 'prose-only', 'tool-only', 'always']
 
     /**
      * dsh's locale runtime publishes an immutable snapshot and notifies on
@@ -449,6 +471,15 @@ window.__ModuleLoader__.load({
         border: '1px solid currentColor', borderRadius: 'var(--dsw-radius-xs)',
         background: 'transparent',
       },
+      // Sized to the row's own line box: a selector at the workspace picker's
+      // height would push every row's first line out of alignment.
+      modeSelect: {
+        fontFamily: 'var(--dsw-font-mono, monospace)', fontSize: '11px', lineHeight: '16px', height: '18px',
+        boxSizing: 'border-box', maxWidth: '160px', padding: '0 2px', margin: '0',
+        cursor: 'pointer',
+        border: '1px solid var(--dsw-alias-border-12)', borderRadius: 'var(--dsw-radius-xs)',
+        background: 'var(--dsw-alias-bg-layer-2)', color: 'var(--dsw-alias-label-secondary)',
+      },
       rowSelected: { background: 'var(--dsw-alias-bg-layer-3)' },
       modalBackdrop: {
         position: 'fixed', inset: '0', zIndex: 1000,
@@ -546,6 +577,19 @@ window.__ModuleLoader__.load({
       return key === undefined ? code : t(key)
     }
 
+    /**
+     * The mode a rule states for itself, as opposed to one an override forces.
+     *
+     * The report carries both because an overridden rule no longer says what it
+     * would have said, and the selector's "follow the rule" option has to name
+     * what following means. A rule that states no mode at all follows the
+     * profile's `ttsr.interruptMode` instead, which is what an absent value
+     * says everywhere else on the page.
+     */
+    function ownMode(rule) {
+      return rule.modeOverride === undefined ? rule.interruptMode : rule.ownInterruptMode
+    }
+
     /** One line of a rule, shared by the audit table and the toggle list. */
     function RuleLine(props) {
       const rule = props.rule
@@ -581,9 +625,25 @@ window.__ModuleLoader__.load({
           h('span', { style: { display: 'flex', gap: '8px', alignItems: 'flex-start', flexWrap: 'wrap', minHeight: styles.rowLine } },
             h('span', { style: { ...styles.name, lineHeight: styles.rowLine, minHeight: styles.rowLine } }, rule.name),
             h('span', { style: rule.active ? styles.state : styles.off },
-              rule.active
-                ? (rule.interruptMode === undefined ? t('inForceState') : `${t('inForceState')} · ${rule.interruptMode}`)
-                : t('offState', { reason: translateReason(rule.reason, t) })),
+              rule.active ? t('inForceState') : t('offState', { reason: translateReason(rule.reason, t) })),
+            // The mode selector, on every row including the bundled ones: 27 of
+            // the rules that ship with this plugin have no file a reader can
+            // edit, so this control is the only way to change how one of them
+            // interrupts. It writes to the profile rather than to a rule file,
+            // which is why a project rule's own value is offered as an option
+            // instead of being overwritten by the same gesture.
+            props.onMode !== undefined && h('select', {
+              style: styles.modeSelect,
+              value: rule.modeOverride ?? '',
+              disabled: props.busy === true,
+              title: t('modeHint'),
+              onChange: event => props.onMode(rule.name, event.target.value),
+            }, [
+              h('option', { key: 'follow', value: '' }, ownMode(rule) === undefined
+                ? t('modeFollow')
+                : t('modeFollowsRule', { mode: ownMode(rule) })),
+              ...INTERRUPT_MODES.map(mode => h('option', { key: mode, value: mode }, mode)),
+            ]),
             props.trailing !== undefined && h('span', { style: styles.badge }, props.trailing),
             props.onEdit !== undefined && h('button', {
               type: 'button', style: styles.button,
@@ -1142,6 +1202,26 @@ window.__ModuleLoader__.load({
         apply(off.has(name) ? [...off].filter(entry => entry !== name) : [...off, name].sort())
       }, [off, apply])
 
+      /**
+       * Set or clear one rule's interrupt-mode override, for the per-row mode
+       * selector.
+       *
+       * Goes through the same wrapper as every other write, and reads the
+       * report back afterwards rather than patching the row: the Host has
+       * already applied the change to the report it serves, and a selector
+       * optimistically showing a mode the write refused would be a lie.
+       */
+      const chooseMode = useCallback((name, mode) => {
+        setBusy(true)
+        setError(undefined)
+        runWrite(() => ctx.remote.dshRules.setMode(name, mode), {
+          t,
+          onOk: () => refresh(),
+          onError: setError,
+          onDone: () => setBusy(false),
+        })
+      }, [ctx, refresh, t])
+
       // The checkbox selects; the bulk bar acts. Overloading one control with
       // "click to toggle, click again to select" made the counters lie.
       const toggleSelect = useCallback(name => {
@@ -1211,7 +1291,7 @@ window.__ModuleLoader__.load({
         // Without this, an empty intersection looks identical to a hung audit:
         // no rows, and a header still counting rules that are not on screen.
         visible.length === 0 && h('p', { style: styles.hint }, t('noMatch')),
-        h('div', { style: styles.list }, visible.map(rule =>
+        h('div', { style: styles.list, 'data-dsh-rules': 'list' }, visible.map(rule =>
           h(RuleLine, {
             key: rule.name,
             rule: {
@@ -1224,6 +1304,8 @@ window.__ModuleLoader__.load({
               scope: rule.scope,
               triggers: rule.triggers,
               interruptMode: rule.interruptMode,
+              ownInterruptMode: rule.ownInterruptMode,
+              modeOverride: rule.modeOverride,
               // The row states what the Host reported, which is not the same
               // thing as membership of the user's own list: a shadowed or
               // triggerless rule is off for a reason the reader never chose,
@@ -1240,6 +1322,7 @@ window.__ModuleLoader__.load({
             busy,
             onSelect: toggleSelect,
             onSwitch: toggleOne,
+            onMode: chooseMode,
             onEdit: rule.provider === 'builtin-defaults' ? undefined : () => openEditor(rule.name),
           }))),
         saved !== undefined && h('p', { style: styles.hint }, t('savedRule', { name: saved })),

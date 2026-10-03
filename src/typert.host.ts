@@ -64,6 +64,8 @@ const reportSchema = z.object({
     description: z.string().optional(),
     globs: stringArray.optional(),
     interruptMode: z.string().optional(),
+    ownInterruptMode: z.string().optional(),
+    modeOverride: z.string().optional(),
     triggers: stringArray,
   })),
   warnings: stringArray,
@@ -79,9 +81,18 @@ const toggleSchema = z.object({
   guidance: z.string().optional(),
   disabled: stringArray,
 })
+// The mode vocabulary is not repeated here: the Host validates it where it
+// lives, and a copy in the manifest would be a second list to keep in step.
+// What the wire carries is text, and an empty one means "let the rule speak".
+const modeChangeSchema = z.object({
+  ok: z.boolean(),
+  guidance: z.string().optional(),
+  mode: z.string().optional(),
+})
 
 const reportCodec = strictCodec('RuleAuditReport', reportSchema)
 const toggleCodec = strictCodec('ToggleResult', toggleSchema)
+const modeChangeCodec = strictCodec('ModeChangeResult', modeChangeSchema)
 const ruleNamesCodec = strictCodec('RuleNames', z.array(z.string()).max(64))
 
 export const TYPERT = {
@@ -100,6 +111,7 @@ export const TYPERT = {
         members: [
           { name: 'audit', signature: 'audit(): RuleAuditReport', kind: 'method', summary: 'Every discovered rule, whether it is in force, and why an inactive one is not.' },
           { name: 'setDisabled', signature: 'setDisabled(names: string[]): Promise<ToggleResult>', kind: 'method', summary: 'Replace the disabled set for every discovered rule, persisting it to the profile.' },
+          { name: 'setMode', signature: 'setMode(name: string, mode: string): Promise<ModeChangeResult>', kind: 'method', summary: 'Set or clear one rule\'s interrupt-mode override; an empty mode lets the rule speak for itself again.' },
           { name: 'toggleable', signature: 'toggleable: readonly string[]', kind: 'property', summary: 'Rule names the page may toggle: everything the current report knows.' },
           { name: 'readRule', signature: 'readRule(name: string): Promise<ReadRuleResult>', kind: 'method', summary: 'One rule\'s backing file, for the page editor.' },
           { name: 'writeRule', signature: 'writeRule(name: string, content: string): Promise<ToggleResult>', kind: 'method', summary: 'Overwrite one rule\'s backing file.' },
@@ -133,6 +145,20 @@ export const TYPERT = {
         { name: 'names', wire: 'names', source: 'json', codec: ruleNamesCodec },
       ],
       result: toggleCodec,
+    },
+    {
+      id: `${PACKAGE_NAME}#dshRules/setMode`,
+      service: 'dshRules',
+      namespace: 'dshRules',
+      method: 'setMode',
+      invocation: { kind: 'direct' },
+      parameters: [
+        { name: 'name', wire: 'name', source: 'json', codec: strictCodec('RuleName', z.string().min(1)) },
+        // Empty rather than absent: the page's selector offers a blank option
+        // meaning "follow the rule", and JSON has no `undefined` to send.
+        { name: 'mode', wire: 'mode', source: 'json', codec: strictCodec('InterruptMode', z.string().max(32)) },
+      ],
+      result: modeChangeCodec,
     },
     {
       id: `${PACKAGE_NAME}#dshRules/readRule`,
