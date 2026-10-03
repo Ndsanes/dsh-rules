@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildRuleFromMarkdown, looksLikeGlob, parseAgents, parseScope, parseScopeWithUnknown, splitInlineFlags } from '../src/rule.ts'
+import { buildRuleFromMarkdown, looksLikeGlob, parseAgents, parseScope, parseScopeWithUnknown, splitInlineFlags, withModeOverrides } from '../src/rule.ts'
 
 const SOURCE = { provider: 'native', path: '/tmp/x.md', priority: 100 }
 
@@ -271,5 +271,32 @@ describe('looksLikeGlob', () => {
     expect(looksLikeGlob('def .* class')).toBe(false)
     expect(looksLikeGlob('api/v1')).toBe(false)
     expect(looksLikeGlob('io/ioutil')).toBe(false)
+  })
+})
+
+describe('withModeOverrides', () => {
+  it('gives a named rule the override as its mode', () => {
+    const [applied] = withModeOverrides([{ name: 'ts-set-map' }], { 'ts-set-map': 'never' })
+    expect(applied?.interruptMode).toBe('never')
+  })
+
+  it('copies the rule instead of mutating it', () => {
+    // The 27 rules that ship with the plugin are module-level constants shared
+    // by every session; writing to one would leak an override into a session
+    // that never asked for it.
+    const original = { name: 'ts-set-map' }
+    withModeOverrides([original], { 'ts-set-map': 'never' })
+    expect(original.interruptMode).toBeUndefined()
+  })
+
+  it('leaves every other rule exactly as discovery produced it', () => {
+    const other = { name: 'other', interruptMode: 'always' as const }
+    const [same] = withModeOverrides([other], { 'ts-set-map': 'never' })
+    expect(same).toBe(other)
+  })
+
+  it('returns the rules untouched when nothing is overridden', () => {
+    const rules = [{ name: 'a' }, { name: 'b' }]
+    expect(withModeOverrides(rules, {})).toEqual(rules)
   })
 })

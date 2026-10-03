@@ -377,3 +377,29 @@ export function buildRuleFromMarkdown(input: RuleInput): Rule {
   if (input.overrides?.alwaysApply !== undefined) rule.alwaysApply = input.overrides.alwaysApply
   return rule
 }
+
+/**
+ * Copy any rule the overrides name, with the override as its mode.
+ *
+ * Done before bucketing so one rule object carries the effective mode
+ * everywhere downstream reads it: the enforcement path, the audit row's state
+ * text, and the listing the `rule` tool prints.
+ *
+ * The named rules are copied rather than mutated. The 27 rules that ship with
+ * this plugin are module-level constants shared by every session, so writing to
+ * one would let an override leak into a session that never asked for it.
+ *
+ * @param rules - every rule discovery produced, before bucketing.
+ * @param overrides - rule name to mode, as the profile holds them.
+ */
+export function withModeOverrides<T extends { name: string; interruptMode?: InterruptMode }>(
+  rules: readonly T[],
+  overrides: Readonly<Record<string, InterruptMode>>,
+): T[] {
+  const names = Object.keys(overrides)
+  if (names.length === 0) return [...rules]
+  return rules.map(rule => {
+    const mode = overrides[rule.name]
+    return mode === undefined ? rule : { ...rule, interruptMode: mode }
+  })
+}

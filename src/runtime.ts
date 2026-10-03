@@ -29,7 +29,7 @@ import { discoverAll } from './discovery.ts'
 import { dedupeDuplicateBodies, renderAlwaysApply, renderRulebook } from './prompt.ts'
 import { RuleSession, toolPaths, toolSnapshot } from './session.ts'
 import { RuleSessionStore } from './sessions.ts'
-import type { Rule } from './rule.ts'
+import { withModeOverrides, type Rule } from './rule.ts'
 import { createRuleTool, ruleFilePath, type RuleLookup, type RuleToggle, type RuleWriteResult } from './tool.ts'
 import { ensureRuleDir, resolveRuleDir, ruleDir, type RuleLocation, type RuleScope } from './rulesdir.ts'
 import { migrateRules, type MigrationResult } from './migrate.ts'
@@ -876,8 +876,11 @@ async function buildSession(
       copilotInstructionDirs: config.copilotInstructionDirs.map(expandHome),
     }),
   ]
-  const capability = loadCapability(providers)
   const live = ttsrConfig()
+  const capability = loadCapability(providers.map(provider => ({
+    ...provider,
+    rules: withModeOverrides(provider.rules, live.modeOverrides),
+  })))
   const buckets = bucketRules(capability.items, {
     builtinRules: live.builtinRules,
     disabledRules: live.disabledRules,

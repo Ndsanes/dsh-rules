@@ -69,6 +69,8 @@ export interface ResolvedTtsrConfig {
   repeatGap: number
   builtinRules: boolean
   disabledRules: readonly string[]
+  /** Per-rule `interruptMode` overrides, keyed by rule name. */
+  modeOverrides: Readonly<Record<string, InterruptMode>>
   judge: 'auto' | 'on' | 'off'
   judgeProvider: string | undefined
   judgeModel: string | undefined
@@ -92,6 +94,7 @@ const TTSR_DEFAULTS = {
   repeatGap: 10,
   builtinRules: true,
   disabledRules: [] as string[],
+  modeOverrides: {} as Readonly<Record<string, InterruptMode>>,
   judge: 'auto' as const,
 }
 
@@ -126,6 +129,22 @@ export const Config = z.object({
     repeatGap: z.number().min(1).default(TTSR_DEFAULTS.repeatGap),
     builtinRules: z.boolean().default(TTSR_DEFAULTS.builtinRules),
     disabledRules: z.array(z.string()).default(TTSR_DEFAULTS.disabledRules),
+    /**
+     * Per-rule `interruptMode` overrides, one `<rule-name>=<mode>` entry each.
+     *
+     * A rule states its own mode in its frontmatter, but 27 of the rules that
+     * ship with this plugin have no file a reader can edit: they are compiled
+     * into the bundle, so the editor refuses them. Without an override the only
+     * way to soften one is to edit files inside `node_modules`. Overriding here
+     * gives every rule the same control, and it lands in the profile patch
+     * beside `disabledRules` rather than in anyone's working tree.
+     *
+     * A list of strings, like `disabledRules`, rather than a mapping:
+     * schemastery's one record-shaped schema reaches into cosmokit, a package
+     * this one does not depend on, which leaves `Config` unnameable. An entry
+     * that is not `<name>=<mode>` is ignored rather than guessed at.
+     */
+    modeOverrides: z.array(z.string()).default([]),
     judge: z.union(['auto', 'on', 'off'] as const).default(TTSR_DEFAULTS.judge),
     judgeProvider: z.string(),
     judgeModel: z.string(),
@@ -141,6 +160,7 @@ export const TTSR_DEFAULT: ResolvedTtsrConfig = {
   repeatGap: 10,
   builtinRules: true,
   disabledRules: [],
+  modeOverrides: {},
   judge: 'auto',
   judgeProvider: undefined,
   judgeModel: undefined,
@@ -157,8 +177,56 @@ export const TTSR_DEFAULT: ResolvedTtsrConfig = {
 export function liveTtsr(source: Config | undefined): ResolvedTtsrConfig {
   const value = source?.ttsr
   if (value === undefined) return TTSR_DEFAULT
-  if (isVolatileRef(value)) return value.get() ?? TTSR_DEFAULT
-  return { ...TTSR_DEFAULT, ...value }
+  if (isVolatileRef(value)) return normalise(value.get())
+  return normalise(value)
+}
+
+/** Every mode a rule may be overridden to, in the order the panel lists them. */
+export const INTERRUPT_MODES = ['never', 'prose-only', 'tool-only', 'always'] as const
+
+/**
+ * Fold the override list into the lookup shape.
+ *
+ * `liveTtsr` promises a {@link ResolvedTtsrConfig}, whose `modeOverrides` is a
+ * map, while what the schema stores is a list. Normalising here means no caller
+ * has to parse, and an entry that is not `<name>=<mode>` is dropped instead of
+ * half-applied.
+ */
+/**
+ * The stored shape, plus the already-folded one.
+ *
+ * `liveTtsr` is reached both from the loader, where `ttsr` is the schema's
+ * list shape, and from a volatile reference typed as the resolved config, whose
+ * `modeOverrides` is already a map. Both are accepted so neither path needs a
+ * cast at the call site.
+ */
+type StoredTtsr = Partial<Omit<ResolvedTtsrConfig, 'modeOverrides'>> & {
+  readonly modeOverrides?: readonly string[] | Readonly<Record<string, InterruptMode>>
+}
+
+function normalise(value: StoredTtsr | undefined): ResolvedTtsrConfig {
+  const overrides: Record<string, InterruptMode> = {}
+  if (value?.modeOverrides !== undefined && !Array.isArray(value.modeOverrides)) {
+    // Already folded. Nothing to parse; an unknown value still gets dropped so
+    // a stale config cannot smuggle a mode through.
+    for (const [name, mode] of Object.entries(value.modeOverrides)) {
+      if (INTERRUPT_MODES.includes(mode as InterruptMode)) overrides[name] = mode as InterruptMode
+    }
+    return { ...TTSR_DEFAULT, ...value, modeOverrides: overrides }
+  }
+  for (const entry of (value?.modeOverrides ?? []) as readonly string[]) {
+    if (typeof entry !== 'string') continue
+    const at = entry.lastIndexOf('=')
+    if (at <= 0) continue
+    const mode = entry.slice(at + 1)
+    if (INTERRUPT_MODES.includes(mode as InterruptMode)) overrides[entry.slice(0, at)] = mode as InterruptMode
+  }
+  return { ...TTSR_DEFAULT, ...value, modeOverrides: overrides }
+}
+
+/** Render one override entry back into the form the schema stores. */
+export function formatModeOverride(name: string, mode: InterruptMode): string {
+  return `${name}=${mode}`
 }
 
 /** Report whether a config field is a live reference rather than plain data. */
@@ -186,6 +254,7 @@ export function resolveConfig(config: Config = {}): ResolvedConfig {
       repeatGap: ttsr.repeatGap ?? TTSR_DEFAULTS.repeatGap,
       builtinRules: ttsr.builtinRules ?? TTSR_DEFAULTS.builtinRules,
       disabledRules: ttsr.disabledRules ?? TTSR_DEFAULTS.disabledRules,
+      modeOverrides: ttsr.modeOverrides ?? TTSR_DEFAULTS.modeOverrides,
       judge: ttsr.judge ?? TTSR_DEFAULTS.judge,
       judgeProvider: ttsr.judgeProvider,
       judgeModel: ttsr.judgeModel,
