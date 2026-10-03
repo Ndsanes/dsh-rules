@@ -148,7 +148,7 @@ function report(disabled: string[] = [], cwd = '/tmp/fixture', rules: AuditRule[
 /** Mount the section and hand back the element plus the calls it made. */
 async function render(options: {
   disabled?: string[]
-  /** Per-rule delivery counts, which drive the most-delivered chart. */
+  /** Per-rule delivery counts, which drive the delivery-distribution chart. */
   triggered?: Record<string, number>
   cwd?: string
   reply: (names: string[]) => ToggleResult | Promise<ToggleResult>
@@ -395,10 +395,12 @@ async function modeIn(editor: HTMLElement, label: string): Promise<void> {
 }
 
 describe('the rule section in a browser', () => {
-  it('scales the most-delivered bars to the row that leads', async () => {
+  it('scales the folded delivery-detail bars to the row that leads', async () => {
     // Every bar filled its track: `Chart` received `max` but rendered each row
     // with only that row's own fields, so `Bar` divided by `undefined`, the
     // resulting `NaN%` was dropped by CSS, and length carried nothing at all.
+    // The ranking is folded now, but still rendered — a folded chart that was
+    // never drawn would pass this by not existing at all.
     const view = await render({
       reply: () => ({ ok: true }),
       triggered: { 'ts-set-map': 4, 'go-ioutil': 2, 'rs-box-leak': 1 },
@@ -413,6 +415,155 @@ describe('the rule section in a browser', () => {
     // Proportional, not eight identical fills: the point of bars over numbers.
     expect(new Set(widths).size).toBeGreaterThan(1)
     expect(widths).not.toContain('NaN%')
+  })
+
+  describe('the delivery distribution', () => {
+    /** `count` inert rules, so a bucket total is countable by hand. */
+    function inertRules(count: number): AuditRule[] {
+      return Array.from({ length: count }, (_, index) => ({
+        name: `rule-${index}`,
+        provider: 'builtin-defaults',
+        path: `builtin-defaults:rule-${index}.md`,
+        active: true,
+      }))
+    }
+
+    /**
+     * The legend as the reader sees it, one string per bucket.
+     *
+     * Read through the swatches rather than through a container: `Stack` also
+     * draws two other charts on this page, so a positional or text-based query
+     * would keep passing after those changed shape.
+     */
+    function bucketsIn(view: { container: HTMLElement }): string[] {
+      const distribution = view.container.querySelector('[data-dsh-rules="distribution"]') as HTMLElement
+      return [...distribution.querySelectorAll('span')]
+        .filter(node => (node as HTMLElement).style.width === '8px')
+        .map(swatch => swatch.parentElement?.textContent ?? '')
+    }
+
+    /** The ranking's row labels — the fixed-width span `Bar` puts the name in. */
+    function rankingRows(details: HTMLElement): string[] {
+      return [...details.querySelectorAll('span')]
+        .filter(node => (node as HTMLElement).style.width === '150px')
+        .map(node => node.textContent ?? '')
+    }
+
+    it('counts rules into five fixed buckets', async () => {
+      // Eight rules, one distribution: four fired once, one twice, one three
+      // times and two at four or more, leaving none never fired. The ranking
+      // this replaced could not show that shape at all — it had one bar per
+      // rule and a scale set by whichever rule happened to lead.
+      const view = await render({
+        reply: () => ({ ok: true }),
+        rules: inertRules(8),
+        triggered: {
+          'rule-0': 1, 'rule-1': 1, 'rule-2': 1, 'rule-3': 1,
+          'rule-4': 2, 'rule-5': 3, 'rule-6': 5, 'rule-7': 9,
+        },
+      })
+      await settle()
+
+      expect(bucketsIn(view)).toEqual([
+        'never fired 0',
+        '1 time 4',
+        '2 times 1',
+        '3 times 1',
+        '4 or more 2',
+      ])
+
+      // The unit is stated on the chart, because a bare "9" beside a legend of
+      // rule counts reads as nine deliveries and inverts the whole picture.
+      const distribution = view.container.querySelector('[data-dsh-rules="distribution"]') as HTMLElement
+      expect(distribution.textContent).toContain('Each figure counts rules, not deliveries.')
+      view.dispose()
+    })
+
+    it('partitions the rule set, so the buckets add up to every rule', async () => {
+      // The invariant that makes this a composition rather than five unrelated
+      // numbers: one bucket per delivery count, plus the rules that never
+      // fired, is the whole rule set with nothing counted twice or lost.
+      const view = await render({
+        reply: () => ({ ok: true }),
+        rules: inertRules(6),
+        triggered: { 'rule-0': 1, 'rule-1': 2, 'rule-2': 4 },
+      })
+      await settle()
+
+      const legend = bucketsIn(view)
+      expect(legend).toHaveLength(5)
+      // `Stack` renders each legend entry as `<label> <value>`, so the figure is
+      // the last word. Stripping non-digits off the end would not work: every
+      // entry ends in a digit, so the anchor never matches and every total
+      // silently came back `NaN`.
+      const totals = legend.map(item => Number(item.split(' ').pop()))
+      expect(totals).toEqual([3, 1, 1, 0, 1])
+      expect(totals.reduce((sum, value) => sum + value, 0)).toBe(6)
+      view.dispose()
+    })
+
+    it('folds every count of four or more into the last bucket', async () => {
+      // A rule that fired five times is the case the old ranking existed for,
+      // and the case that made it useless: one bar at 5 on a scale of 5. It
+      // has to land in the top bucket without appending a sixth one.
+      const view = await render({
+        reply: () => ({ ok: true }),
+        rules: inertRules(6),
+        triggered: { 'rule-0': 5 },
+      })
+      await settle()
+
+      expect(bucketsIn(view)).toEqual([
+        'never fired 5',
+        '1 time 0',
+        '2 times 0',
+        '3 times 0',
+        '4 or more 1',
+      ])
+      view.dispose()
+    })
+
+    it('says so in words rather than drawing one bar at full width', async () => {
+      // With nothing delivered the distribution is a single bucket at a
+      // hundred percent — a chart whose shape says there is a spread to read
+      // when there is none.
+      const view = await render({ reply: () => ({ ok: true }), rules: inertRules(4) })
+      await settle()
+
+      const distribution = view.container.querySelector('[data-dsh-rules="distribution"]') as HTMLElement
+      expect(distribution.textContent).toContain('No rule has been delivered to the model yet.')
+      expect(bucketsIn(view)).toEqual([])
+      const widths = [...distribution.querySelectorAll('span[style*="width"]')]
+        .map(node => (node as HTMLElement).style.width)
+      expect(widths.filter(width => width.endsWith('%'))).toEqual([])
+      view.dispose()
+    })
+
+    it('keeps the per-rule ranking folded until it is asked for', async () => {
+      const view = await render({
+        reply: () => ({ ok: true }),
+        triggered: { 'ts-set-map': 4, 'go-ioutil': 2 },
+      })
+      await settle()
+
+      const details = view.container.querySelector('[data-dsh-rules="delivery-detail"]') as HTMLDetailsElement
+      expect(details.tagName).toBe('DETAILS')
+      // Folded by default, and the summary names how much is in there — a
+      // collapsed row with no count reads as an empty panel.
+      expect(details.open).toBe(false)
+      const summary = details.querySelector('summary') as HTMLElement
+      expect(summary.textContent).toContain('2')
+
+      // Anchored to the details, not to the page: the toggle list further down
+      // always names these rules, so a page-wide assertion would pass whether
+      // or not the ranking were there at all.
+      expect(rankingRows(details)).toEqual(['ts-set-map', 'go-ioutil'])
+
+      await act(async () => { summary.click() })
+      expect(details.open).toBe(true)
+      expect(rankingRows(details)).toEqual(['ts-set-map', 'go-ioutil'])
+      view.dispose()
+    })
   })
 
   it('renders the report the audit call returned', async () => {

@@ -119,16 +119,34 @@ that never opens this panel.
 | Proportion | where rules come from, split by source convention |
 | Proportion | what is in force |
 | Proportion | what makes them fire — `condition`, `ast-grep`, `question` |
-| Ranking | the rules delivered to the model most often |
+| Proportion | how delivery is spread — `never fired`, `1 time`, `2 times`, `3 times`, `4 or more` |
+| Ranking, folded | per-rule delivery detail, behind a summary that names how many rules are in it |
 
-The first three are composition, not ranking: one full-width bar split by share
+The first four are composition, not ranking: one full-width bar split by share
 with a legend beside it. Drawing a separate bar per category was strictly worse
 than reading the numbers — the dominant category filled its whole track and the
-minor one was a stub, so length carried nothing the label did not. Only the
-delivered-rules chart is a ranking, so only that one uses bars. dsh's web client
-ships no charting library, and `dsh-usage-chart` — the one community plugin that
-draws charts — documents the same conclusion: a self-drawn SVG that matches the
-platform's own rendering is smaller and steadier than a vendored library.
+minor one was a stub, so length carried nothing the label did not. dsh's web
+client ships no charting library, and `dsh-usage-chart` — the one community
+plugin that draws charts — documents the same conclusion: a self-drawn SVG that
+matches the platform's own rendering is smaller and steadier than a vendored
+library.
+
+The delivery chart is the one that used to be a ranking, and a ranking was the
+wrong form for it. It grew a row per triggered rule, its scale was set by
+whichever rule had been delivered to most often, and on a real profile that
+winner is five — so the page showed a field of one colour whose length said
+which rule got lucky, and said nothing about whether delivery works at all. The
+chart is now the distribution of delivery counts in five fixed buckets, so two
+profiles stay comparable and `4 or more` absorbs the tail: one runaway rule can
+neither stretch the scale nor add a sixth bucket. Its legend counts *rules*, not
+deliveries, and the chart says so under the legend, because the two read the
+opposite way round. Nothing delivered yet is a sentence rather than one bucket
+at a hundred percent.
+
+The per-rule ranking is still there, folded behind `Delivery detail (N rules)`.
+It answers the narrower question — which rule — for the reader who has to go act
+on one, and it is neutral rather than red: a high count is not a fault, and
+painting the whole panel for one delivered rule made the colour mean nothing.
 
 Delivery counts are persisted to `$DSH_HOME/dsh-rules/triggers.json`, because a
 count held only in memory reads zero in every process that did not itself

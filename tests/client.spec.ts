@@ -510,6 +510,25 @@ describe('rule audit', () => {
     const client = readFileSync(join(__dirname, '..', 'src', 'client', 'index.js'), 'utf8')
     expect(client).not.toContain('=== \'项目与用户规则来自\'')
   })
+
+  it('labels the delivery buckets in both languages, and names their unit', () => {
+    // The legend numbers are counts of rules, not of deliveries, and a bucket
+    // shown as a bare figure reads as the other one. The unit has to survive
+    // the translation, and every bucket needs both spellings — a key added to
+    // one table alone renders as its own name on screen.
+    for (const locale of ['en', 'zh'] as const) {
+      const messages = COPY[locale] as Record<string, string>
+      for (const key of ['bucketNeverFired', 'bucketOnce', 'bucketTwice', 'bucketThrice', 'bucketFourPlus']) {
+        expect(messages[key]).toBeTruthy()
+      }
+      expect(messages.distributionNote).toBeTruthy()
+      expect(messages.chartDistribution).toBeTruthy()
+    }
+    // The folded ranking says how much is behind it, so a collapsed row does
+    // not read as an empty panel.
+    expect(translator('en')('chartDelivered', { count: 8 })).toBe('Delivery detail (8 rules)')
+    expect(translator('zh')('chartDelivered', { count: 8 })).toBe('投递明细（8 条规则）')
+  })
 })
 
 describe('bundled rule toggles', () => {

@@ -244,6 +244,7 @@ window.__ModuleLoader__.load({
       if (total === 0) {
         return h('div', { style: styles.chart },
           h('div', { style: styles.chartTitle }, props.title),
+          props.note && h('p', { style: styles.hint }, props.note),
           h('p', { style: styles.hint }, props.empty ?? '—'))
       }
 
@@ -266,13 +267,20 @@ window.__ModuleLoader__.load({
       return h('div', { style: styles.chart },
         h('div', { style: styles.chartTitle }, props.title),
         h('div', { style: styles.stackTrack }, segments),
-        h('div', { style: styles.legend }, legend))
+        h('div', { style: styles.legend }, legend),
+        // The legend numbers are a different quantity from the ones the title
+        // is about, and a reader who assumes otherwise reads them backwards, so
+        // the unit is stated rather than left to be inferred from the title.
+        props.note && h('p', { style: styles.hint }, props.note))
     }
 
     /** A titled group of bars, for a ranking rather than a whole. */
     function Chart(props) {
       return h('div', { style: styles.chart },
-        h('div', { style: styles.chartTitle }, props.title),
+        // The title is optional because a ranking folded inside a `<details>`
+        // is already named by the summary the reader is looking at, and a
+        // second copy of the same words directly under it says nothing.
+        props.title && h('div', { style: styles.chartTitle }, props.title),
         props.rows.length === 0
           ? h('p', { style: styles.hint }, props.empty ?? 'Nothing to show yet.')
           : // `max` has to reach every row, not just the chart: without it each
@@ -500,6 +508,15 @@ window.__ModuleLoader__.load({
       statLabel: { fontSize: '11px', color: 'var(--dsw-alias-label-tertiary)' },
       charts: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: '16px', marginTop: '12px' },
       chart: { display: 'flex', flexDirection: 'column', gap: '4px' },
+      // The summary is a chart title that happens to be clickable, so it is
+      // spelled out again here rather than spread off `chartTitle`: the object
+      // literal cannot reference itself, and a folded chart with a plain body
+      // summary reads as a stray paragraph instead of as a section head.
+      disclosure: { display: 'flex', flexDirection: 'column', gap: '4px', minWidth: '0' },
+      disclosureSummary: {
+        fontSize: '11px', color: 'var(--dsw-alias-label-secondary)',
+        textTransform: 'uppercase', letterSpacing: '0.04em', cursor: 'pointer',
+      },
       chartTitle: { fontSize: '11px', color: 'var(--dsw-alias-label-secondary)', textTransform: 'uppercase', letterSpacing: '0.04em' },
       stackTrack: {
         display: 'flex', width: '100%', height: '10px', borderRadius: '5px',
@@ -624,14 +641,41 @@ window.__ModuleLoader__.load({
         .filter(([name]) => !inScope.has(name))
         .reduce((total, [, count]) => total + count, 0)
 
-      const busiest = scopedCounts
-        .sort((a, b) => b[1] - a[1])
-        .slice(0, 8)
-        .map(([label, value]) => ({ label, value, color: SERIES.alert }))
-
       const delivered = scopedCounts.reduce((total, [, count]) => total + count, 0)
       const neverFired = report.rules.filter(rule => (triggered[rule.name] ?? 0) === 0).length
       const withTrigger = report.rules.filter(rule => (rule.triggers?.length ?? 0) > 0).length
+
+      // How delivery is spread, rather than which rule leads it. A ranking
+      // answered a question almost nobody has while hiding the one they do
+      // have: it grew a row per rule, its scale was set by whichever rule
+      // happened to fire most, and on a real profile that winner is 5 — so a
+      // page-wide field of one colour with a length set by one rule said more
+      // about how many rules exist than about delivery. Five buckets are fixed
+      // on purpose, so two profiles stay comparable, and the last one absorbs
+      // everything from four up: a single runaway rule can neither stretch the
+      // scale nor append a sixth bucket the reader has never seen.
+      //
+      // Every value is a count of rules, and the five of them add up to the
+      // rule total — the track is a whole partitioned into parts, which is what
+      // `Stack` draws and what `Chart` cannot.
+      const distribution = [
+        { label: t('bucketNeverFired'), value: neverFired, color: SERIES.neutral },
+        { label: t('bucketOnce'), value: scopedCounts.filter(([, count]) => count === 1).length, color: CATEGORY[0] },
+        { label: t('bucketTwice'), value: scopedCounts.filter(([, count]) => count === 2).length, color: CATEGORY[2] },
+        { label: t('bucketThrice'), value: scopedCounts.filter(([, count]) => count === 3).length, color: SERIES.off },
+        { label: t('bucketFourPlus'), value: scopedCounts.filter(([, count]) => count >= 4).length, color: CATEGORY[1] },
+      ]
+
+      // The per-rule ranking survives for the reader who has to go act on one
+      // rule, but folded: it is the answer to a narrower question than the
+      // distribution is, and open by default it outshouted the chart above it.
+      // Neutral rather than the alert red it used to wear — a high count is not
+      // a fault, and painting the whole panel red for one delivered rule made
+      // the colour mean nothing.
+      const busiest = scopedCounts
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 8)
+        .map(([label, value]) => ({ label, value, color: SERIES.neutral }))
 
       return h('div', { 'data-dsh-rules': 'dashboard' },
         // Deliberately no counts of how many rules exist or how many are in
@@ -648,12 +692,30 @@ window.__ModuleLoader__.load({
             rows: triggersByKind.rows,
             empty: t('noTrigger'),
           }),
-          h(Chart, {
-            title: t('chartDelivered'),
-            rows: busiest,
-            max: busiest.reduce((top, row) => Math.max(top, row.value), 0),
-            empty: t('noDelivered'),
-          })),
+          h('div', { 'data-dsh-rules': 'distribution' },
+            h(Stack, {
+              title: t('chartDistribution'),
+              // With nothing delivered the distribution is one bar at a
+              // hundred percent in the "never fired" bucket, which states what
+              // the stat row above already states and looks like a chart. The
+              // sentence below the track says the same thing without drawing a
+              // shape that implies there is a spread to read.
+              rows: delivered === 0 ? [] : distribution,
+              note: t('distributionNote'),
+              empty: t('noDelivered'),
+            })),
+          // Native disclosure rather than a `useState` toggle: the folded state
+          // is the default, and `<details>` is the one element that stays
+          // folded across a re-render without the page having to remember that
+          // the reader never opened it.
+          h('details', { style: styles.disclosure, 'data-dsh-rules': 'delivery-detail' },
+            h('summary', { style: styles.disclosureSummary },
+              t('chartDelivered', { count: busiest.length })),
+            h(Chart, {
+              rows: busiest,
+              max: busiest.reduce((top, row) => Math.max(top, row.value), 0),
+              empty: t('noDelivered'),
+            }))),
         h('p', { style: styles.hint },
           `${t('deliveryNote')} ${elsewhere > 0 ? t('deliveryNoteElsewhere') : t('deliveryNoteScoped')}`))
     }
