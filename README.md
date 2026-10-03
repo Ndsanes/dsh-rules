@@ -54,13 +54,12 @@ The migration body.
 | `interruptMode` | `never` \| `prose-only` \| `tool-only` \| `always`. |
 
 In the rule editor, a field with a fixed vocabulary — `interruptMode` today —
-is a dropdown rather than a free text box, so its value cannot be misspelled.
-That matters more than a missing menu: an unrecognised `interruptMode` is not
-rejected, it falls back to the profile default, and the default is `always` —
-so a rule written to stay quiet would otherwise end up interrupting everything.
+is a dropdown listing exactly the accepted values, so the value cannot be
+misspelled. That matters because an unrecognised `interruptMode` is not
+rejected: it falls back to the profile default, and the default is `always`.
 The dropdown's first option means "inherit the profile default", and choosing it
-**removes the line** from the file rather than writing an empty value, which
-would parse as unrecognised and land on the same default.
+**removes the line** from the file. An empty value would parse as unrecognised
+and land on the same default it was meant to escape.
 
 Write regexes with single-quoted YAML scalars. A double-quoted scalar treats
 `\s`, `(` and `(`-family sequences as YAML escapes, which makes js-yaml reject
@@ -149,11 +148,11 @@ Below the charts, the detail list:
 | Filter by source | one chip per convention, with counts: `Bundled with the plugin 27`, `.omp/rules 2`, and any other provider the profile contributes |
 | Filter by text | matches rule name, description, and source path |
 | Per row | name, whether it is in force, its description, and `source · path` |
-| Inactive rows | say why — `off · listed in ttsr.disabledRules` — rather than a bare `off` |
+| Inactive rows | say why, as in `off · listed in ttsr.disabledRules` |
 
 The Host sends a stable reason code (`disabled`, `builtins-off`, `agent-filter`,
 `no-trigger`, `shadowed`) and the page localizes it; a code the page does not
-recognize is shown verbatim rather than flattened into "unknown". The `rule`
+recognize is shown verbatim, never flattened into "unknown". The `rule`
 tool spells the same codes out in English, because its reader is a model.
 
 **Bundled rules** — the 27 shipped rules, grouped by family (`ts` 13, `go` 8,
@@ -187,8 +186,8 @@ The `rule` tool is the management surface.
 Toggles are written to the profile patch through the settings service, so they
 persist across restarts, and the `ttsr` config block is volatile, so they apply
 on the **next step** rather than the next restart. When the deployment has no
-settings service, the tool says so and prints the exact YAML to add instead of
-claiming a change it did not make.
+settings service, the tool says so and prints the exact YAML to add. It never
+claims a change it did not make.
 
 Only bundled rules are toggleable. A user or project rule is governed by its own
 file, and the tool points you at that file rather than editing it for you.
@@ -228,7 +227,7 @@ block and a `body`, and the file lands in whichever directory that scope
 resolves to — see below. It joins the audit like any other project rule, so it
 can be edited or deleted from the panel.
 
-Five things are refused rather than written:
+Five things are refused:
 
 - **A name that is a path.** The name becomes a filename, so `../`, a path
   separator, a leading dot or a character the filesystem reserves all stop it
@@ -254,7 +253,7 @@ Two conventions are in play. OMP keeps project rules in `<cwd>/.omp/rules` and
 user rules in `~/.omp/agent/rules`. dsh has no rules directory of its own — it
 reads `<cwd>/.dsh/AGENTS.md`, `<cwd>/.dsh/skills` and the matching paths under
 `$DSH_HOME`, and nothing rule-shaped — so this plugin defines `<cwd>/.dsh/rules`
-and `$DSH_HOME/rules`, following that layout rather than inventing a third one.
+and `$DSH_HOME/rules`, following that layout.
 
 The choice is **OMP-first**, per scope:
 
@@ -290,7 +289,7 @@ once, which is a real arrangement and works like any other.
 
 A migration is a change of directory, not of meaning: both sides are read by
 discovery, so the name, the body and what the rule does are untouched. Three
-things are refused rather than guessed:
+things are refused:
 
 - **A name already taken at the destination.** Two files claiming one name
   means only one of them applies, and the loser is invisible in the audit, so
@@ -391,11 +390,11 @@ directory before discovery reads them; everything else is taken literally.
   `parse('Go', src)` throws `Go is not supported in napi`, and the plugin does
   not register dynamic languages, so the three bundled Go rules carrying
   `astCondition` (`go-range-int`, `go-bench-loop`, `go-new-expr`) cannot fire
-  here. Their patterns are kept on the rule and each one records a warning, so
-  they register as streaming rules and explain themselves instead of skipping
-  silently; a path whose grammar is unknown is skipped rather than mis-parsed.
-  The native addon is loaded on first AST match inside a guard, so a platform
-  without a prebuild costs that one surface rather than the plugin's load.
+  here. Their patterns stay on the rule and each records a warning, so they
+  register as streaming rules and state their own limitation; a path whose
+  grammar is unknown is skipped, never mis-parsed.
+  The native addon loads on first AST match inside a guard, so a platform
+  without a prebuild costs that one surface and not the plugin's load.
 - **Toggles land in the profile patch.** The `rule` tool writes through the
   settings service, so a deployment that does not mount one falls back to
   printed YAML. `settingsNamespace` names the profile row; it defaults to
@@ -409,7 +408,7 @@ A plugin can mount into a harness whose agents already exist — a web app that
 was already running, or a session that outlived a reload. `agent/created` is the
 warm path, not the only one: every surface that can name an agent builds that
 agent's session on first use, so a pre-existing agent is governed from its next
-step rather than running rule-free.
+step; it never runs rule-free.
 
 Two consequences worth knowing:
 
@@ -421,7 +420,7 @@ Two consequences worth knowing:
   is still blocked.
 
 The `rule` tool distinguishes "still being discovered" from "no rules exist",
-so a session that predates the mount says so instead of looking like a broken
+so a session that predates the mount says so, rather than looking like a broken
 rule directory.
 
 ## Development
