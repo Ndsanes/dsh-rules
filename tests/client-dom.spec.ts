@@ -130,13 +130,13 @@ const RULES: AuditRule[] = [
 ]
 
 /** A stand-in for the report the audit service returns. */
-function report(disabled: string[] = [], cwd = '/tmp/fixture', rules: AuditRule[] = RULES) {
+function report(disabled: string[] = [], cwd = '/tmp/fixture', rules: AuditRule[] = RULES, triggered: Record<string, number> = {}) {
   return {
     cwd,
     rulebook: [],
     alwaysApply: [],
     ttsr: rules.map(rule => rule.name),
-    triggered: {} as Record<string, number>,
+    triggered,
     rules: rules.map(rule => ({
       ...rule,
       active: disabled.includes(rule.name) ? false : rule.active,
@@ -148,6 +148,8 @@ function report(disabled: string[] = [], cwd = '/tmp/fixture', rules: AuditRule[
 /** Mount the section and hand back the element plus the calls it made. */
 async function render(options: {
   disabled?: string[]
+  /** Per-rule delivery counts, which drive the most-delivered chart. */
+  triggered?: Record<string, number>
   cwd?: string
   reply: (names: string[]) => ToggleResult | Promise<ToggleResult>
   throwSync?: Error
@@ -182,7 +184,10 @@ async function render(options: {
   const remote = {
     $mount: async () => async () => {},
     dshRules: {
-      audit: async () => ({ ok: true, value: report(options.disabled ?? [], options.cwd ?? '/tmp/fixture', options.rules) }),
+      audit: async () => ({
+        ok: true,
+        value: report(options.disabled ?? [], options.cwd ?? '/tmp/fixture', options.rules, options.triggered),
+      }),
       listWorkspaces: async () => ({ ok: true, value: options.workspaces ?? [] }),
       // The Host refuses with guidance rather than rejecting, so the file
       // arrives inside its own `{ok: true, file}` payload — not bare.
@@ -390,6 +395,26 @@ async function modeIn(editor: HTMLElement, label: string): Promise<void> {
 }
 
 describe('the rule section in a browser', () => {
+  it('scales the most-delivered bars to the row that leads', async () => {
+    // Every bar filled its track: `Chart` received `max` but rendered each row
+    // with only that row's own fields, so `Bar` divided by `undefined`, the
+    // resulting `NaN%` was dropped by CSS, and length carried nothing at all.
+    const view = await render({
+      reply: () => ({ ok: true }),
+      triggered: { 'ts-set-map': 4, 'go-ioutil': 2, 'rs-box-leak': 1 },
+    })
+    await settle()
+
+    const audit = view.container.querySelector('[data-dsh-rules="audit"]') as HTMLElement
+    const widths = [...audit.querySelectorAll('span[style*="width"]')]
+      .map(node => (node as HTMLElement).style.width)
+      .filter(width => width.endsWith('%'))
+    expect(widths).toContain('100%')
+    // Proportional, not eight identical fills: the point of bars over numbers.
+    expect(new Set(widths).size).toBeGreaterThan(1)
+    expect(widths).not.toContain('NaN%')
+  })
+
   it('renders the report the audit call returned', async () => {
     const view = await render({ reply: () => ({ ok: true }) })
     await settle()

@@ -275,7 +275,11 @@ window.__ModuleLoader__.load({
         h('div', { style: styles.chartTitle }, props.title),
         props.rows.length === 0
           ? h('p', { style: styles.hint }, props.empty ?? 'Nothing to show yet.')
-          : props.rows.map(row => h(Bar, { key: row.label, ...row })))
+          : // `max` has to reach every row, not just the chart: without it each
+            // bar divides by `undefined`, the resulting `NaN%` is dropped by CSS,
+            // and all eight fill their track identically — a chart whose length
+            // says nothing and whose only working part is the number beside it.
+            props.rows.map(row => h(Bar, { key: row.label, max: props.max, ...row })))
     }
 
     /** One large number with its label. */
