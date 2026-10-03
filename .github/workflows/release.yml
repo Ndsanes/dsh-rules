@@ -43,12 +43,13 @@ jobs:
       - uses: pnpm/action-setup@v4
         with:
           version: 10
+          cache-dependency-path: pnpm-lock.yaml
       - uses: actions/setup-node@v6
         with:
           node-version: '24' # Trusted Publishing needs >= 22.14
-          # Deliberately no cache: a cached store is a copy of this project's
-          # dependency tree on someone else's disk, and npm says so outright.
-          cache: false
+          # No `cache:` here: pnpm/action-setup already installs its own store
+          # cache, and setup-node rejects an explicit `false` in that
+          # arrangement ("Caching for `false` is not supported").
       - run: pnpm install --frozen-lockfile
       - run: pnpm run typecheck
       - run: pnpm test
@@ -90,11 +91,11 @@ jobs:
       - uses: pnpm/action-setup@v4
         with:
           version: 10
+          cache-dependency-path: pnpm-lock.yaml
       - uses: actions/setup-node@v6
         with:
           node-version: '24'
           registry-url: 'https://registry.npmjs.org'
-          cache: false
       - run: pnpm install --frozen-lockfile
       - run: pnpm run build
       - name: Skip when this version is already on npm
